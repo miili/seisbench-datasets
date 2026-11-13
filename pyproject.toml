@@ -25,6 +25,9 @@ seisbench-datasets = "seisbench_datasets.cli:app"
 
 [project.optional-dependencies]
 hinet = ["HinetPy>=0.13"]
+export = [
+    "pyrocko>=2026.11.5",
+]
 
 [dependency-groups]
 dev = [

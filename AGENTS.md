@@ -25,11 +25,16 @@ large for SeisBench itself.
   swarm windows of the Bohemia catalog. Edit the parameters there, not the CSV by hand.
 - `src/seisbench_datasets/cli.py`: typer CLI `seisbench-datasets`, one command per dataset.
   A command always continues the dataset (`update=True`); `--check` (`check.py`) is
-  the read-only report. The Python constructor only compiles a missing or
+  the read-only report; `--recheck-noise` (`recheck.py`) removes noise traces with
+  an earthquake or above the noise fraction from the metadata (waveforms stay in
+  the HDF5); `--export` uses `seisbench.data.inspection` (pyrocko, extra `export`). The Python constructor only compiles a missing or
   incomplete dataset, so loading a complete one stays offline.
 - Noise is planned by proportion, not 1:1: after the event traces, each split gets
   `round(noise_fraction * event traces) - noise traces` more, drawn at random event
-  traces (anchors) with a seeded generator. Which anchors doesn't matter.
+  traces (anchors) with a seeded generator. Which anchors doesn't matter. DLF plans
+  its first noise windows per event trace (for combined Hi-net requests), capped by
+  `cap_noise_jobs` to the noise fraction of each region, so that a resumed
+  compilation doesn't download windows that were replaced before.
 - Noise windows are rejected only for earthquakes: `EarthquakeDetector` (`noise.py`) runs
   PhaseNet and rejects P/S probabilities above 0.5, with `volpick` for DLF (also
   detects long-period events) and `original` for Bohemia (local earthquakes). Data are clipped at 20 MAD first: peak-normalized `volpick` otherwise

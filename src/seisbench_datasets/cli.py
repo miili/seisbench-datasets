@@ -37,6 +37,26 @@ Force = Annotated[
         "to it first."
     ),
 ]
+Export = Annotated[
+    Path | None,
+    typer.Option(
+        file_okay=False,
+        resolve_path=True,
+        help="Export the compiled dataset to this folder, with "
+        "seisbench.data.inspection: MiniSEED per day, picks, events and stations for "
+        "pyrocko. Needs pyrocko, pip install seisbench-datasets[export]. Downloads "
+        "nothing.",
+    ),
+]
+RecheckNoise = Annotated[
+    bool,
+    typer.Option(
+        help="Run the earthquake detection (PhaseNet) over the noise traces already in "
+        "the dataset, and remove those with an earthquake from the metadata, so that "
+        "the next run replaces them. The metadata before is kept as a backup, the "
+        "removed traces are listed in noise_rejected.csv. Downloads nothing.",
+    ),
+]
 Check = Annotated[
     bool,
     typer.Option(
@@ -58,19 +78,38 @@ def main() -> None:
     setup_logging()
 
 
-def _prepare(dataset: type, force: bool, check: bool, noise_fraction) -> bool:
+def _prepare(
+    dataset: type,
+    module,
+    force: bool,
+    check: bool,
+    recheck_noise: bool,
+    noise_fraction: float,
+    export: Path | None = None,
+) -> bool:
     """
-    Runs --check, or prepares --force. Returns True if the dataset is to be compiled.
+    Runs --check, --recheck-noise or --export, or prepares --force. Returns True if
+    the dataset is to be compiled.
+
+    :param module: The module of the dataset, with its noise detection settings
     """
     from seisbench import logger
 
     from seisbench_datasets.data.resume import move_to_backup
 
-    if force and check:
-        raise typer.BadParameter("Use only one of --force and --check.")
+    if force + check + recheck_noise + (export is not None) > 1:
+        raise typer.BadParameter(
+            "Use only one of --force, --check, --recheck-noise and --export."
+        )
     try:
+        if export is not None:
+            _export(dataset, export)
+            return False
         if check:
             _check(dataset, noise_fraction)
+            return False
+        if recheck_noise:
+            _recheck_noise(dataset, module, noise_fraction)
             return False
         if force:
             backup = move_to_backup(dataset._path_internal())
@@ -80,6 +119,88 @@ def _prepare(dataset: type, force: bool, check: bool, noise_fraction) -> bool:
         console.print(f"[red]{exc}")
         raise typer.Exit(1) from exc
     return True
+
+
+def _export(dataset: type, directory: Path) -> None:
+    from seisbench_datasets.data.resume import try_lock
+
+    try:
+        from seisbench.data.inspection import DatasetInspection
+    except ImportError as exc:
+        console.print(
+            "[red]Exporting needs pyrocko: pip install seisbench-datasets[export]"
+        )
+        raise typer.Exit(1) from exc
+
+    files = dataset.files()
+    if not all(file.is_file() for file in files):
+        console.print(f"[red]{dataset._path_internal()} has no compiled dataset.")
+        raise typer.Exit(1)
+    lock = try_lock(files[0])
+    if lock is None:
+        console.print(f"[red]A compilation into {dataset._path_internal()} is running.")
+        raise typer.Exit(1)
+    try:
+        loaded = dataset(compile_from_source=False, component_order="ZNE")
+        DatasetInspection(loaded).export(directory)
+    finally:
+        lock.close()
+    console.print(f"Exported {dataset.__name__} to {directory}")
+
+
+def _recheck_noise(dataset: type, module, noise_fraction: float) -> None:
+    from collections import Counter
+
+    from seisbench_datasets.check import check_dataset, print_report
+    from seisbench_datasets.data.noise import EarthquakeDetector
+    from seisbench_datasets.recheck import (
+        ABOVE_FRACTION,
+        EARTHQUAKE,
+        NOISE_REJECTED_FILE,
+        recheck_noise,
+    )
+
+    files = dataset.files()
+    partial = [file.parent / (file.name + ".partial") for file in files]
+    if not all(file.is_file() for file in files) and not all(
+        file.is_file() for file in partial
+    ):
+        console.print(f"[red]{dataset._path_internal()} has no compiled dataset.")
+        raise typer.Exit(1)
+
+    weights = module.NOISE_PHASENET_WEIGHTS
+    detector = EarthquakeDetector(weights, module.COMPONENT_ORDER)
+    group = module.NOISE_FRACTION_GROUP
+    result = recheck_noise(
+        files,
+        detector,
+        module.NOISE_MAX_PHASE_PROBABILITY,
+        noise_fraction=noise_fraction,
+        group=group,
+    )
+
+    def per_split(reason):
+        counts = Counter(r.split for r in result.removed if r.reason == reason)
+        n = sum(counts.values())
+        return f"{n}" + (
+            " (" + ", ".join(f"{s} {c}" for s, c in sorted(counts.items())) + ")"
+            if n
+            else ""
+        )
+
+    console.print(
+        f"Checked {result.checked} noise traces with PhaseNet {weights}. Removed: "
+        f"{per_split(EARTHQUAKE)} with an earthquake (P or S above "
+        f"{module.NOISE_MAX_PHASE_PROBABILITY}), {per_split(ABOVE_FRACTION)} above "
+        f"the noise fraction {noise_fraction:.0%} per {group}."
+    )
+    if result.removed:
+        console.print(
+            f"The metadata before is in {result.backup.name}, the removed traces are "
+            f"listed in {NOISE_REJECTED_FILE}. Run the command without "
+            "--recheck-noise to replace them."
+        )
+    print_report(check_dataset(dataset._path_internal(), noise_fraction))
 
 
 def _check(dataset: type, noise_fraction: float) -> None:
@@ -122,13 +243,18 @@ def bohemia(
     noise_fraction: NoiseFraction = 0.3,
     force: Force = False,
     check: Check = False,
+    recheck_noise: RecheckNoise = False,
+    export: Export = None,
 ) -> None:
     """
     BohemiaSaxony: local earthquakes in NW Bohemia / Vogtland and Saxony.
     """
+    from seisbench_datasets.data import bohemia
     from seisbench_datasets.data.bohemia import BohemiaSaxony
 
-    if not _prepare(BohemiaSaxony, force, check, noise_fraction):
+    if not _prepare(
+        BohemiaSaxony, bohemia, force, check, recheck_noise, noise_fraction, export
+    ):
         return
     dataset = BohemiaSaxony(
         eida_token=str(eida_token) if eida_token else None,
@@ -162,13 +288,24 @@ def dlf(
     noise_fraction: NoiseFraction = 0.3,
     force: Force = False,
     check: Check = False,
+    recheck_noise: RecheckNoise = False,
+    export: Export = None,
 ) -> None:
     """
     DeepLowFrequency: deep low-frequency events below volcanoes, plus noise.
     """
+    from seisbench_datasets.data import dlf as dlf_module
     from seisbench_datasets.data.dlf import DeepLowFrequency
 
-    if not _prepare(DeepLowFrequency, force, check, noise_fraction):
+    if not _prepare(
+        DeepLowFrequency,
+        dlf_module,
+        force,
+        check,
+        recheck_noise,
+        noise_fraction,
+        export,
+    ):
         return
     hinet_password = None
     if hinet_user is not None:

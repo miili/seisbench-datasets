@@ -84,6 +84,20 @@ def test_bohemia():
         assert abs(waveforms.shape[1] - 12000) <= 1  # Sample alignment
         assert np.ptp(waveforms, axis=1).max() > 0
 
+    # Export for pyrocko, as with --export
+    pytest.importorskip("pyrocko")
+    from pyrocko.model import load_events
+
+    from seisbench_datasets.cli import _export
+
+    export = TinyBohemia._path_internal().parent / "export"
+    _export(TinyBohemia, export)
+    assert list((export / "mseed").glob("*.mseed"))
+    assert (export / "stations.yaml").is_file()
+    assert (
+        len(load_events(str(export / "events.yaml"))) == events["source_id"].nunique()
+    )
+
 
 def test_bohemia_fill_up():
     """

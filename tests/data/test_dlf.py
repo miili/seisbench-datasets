@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import numpy as np
 import obspy
@@ -25,6 +26,7 @@ from seisbench_datasets.data.dlf import (
     NoNoiseWindowError,
     NotQuietError,
     Outcome,
+    cap_noise_jobs,
     check_quiet,
     get_event_params,
     is_away_from_events,
@@ -340,3 +342,26 @@ def test_pick_outside_data(monkeypatch):
     assert download.trace_params["trace_S_arrival_sample"] == 3000
     with pytest.raises(ValueError, match="outside the data"):
         asyncio.run(dataset.get_waveform_data(job(90), None))
+
+
+def test_cap_noise_jobs():
+    def job(kind, region, name):
+        return SimpleNamespace(kind=kind, region=region, trace_name=name)
+
+    jobs = [("src", job("event", "hawaii", f"e{i}")) for i in range(10)]
+    jobs += [("src", job("noise", "hawaii", f"noise_e{i}")) for i in range(5)]
+    jobs += [("src", job("event", "japan", "j0"))]
+    # 2 noise traces of Hawaii are written already, e.g., top-up windows
+    outcomes = [
+        Outcome("noise", "hawaii", "x", f"noise_t{i}", "downloaded") for i in range(2)
+    ]
+    done = {"noise_t0", "noise_t1", "noise_e0"}
+
+    kept = cap_noise_jobs(jobs, done, outcomes, 0.3)
+    noise = [j.trace_name for _, j in kept if j.kind == "noise"]
+    # 30% of 10 event traces: 3, minus the 2 written. noise_e0 is done, so it is kept
+    assert noise == ["noise_e0", "noise_e1"]
+    assert sum(j.kind == "event" for _, j in kept) == 11
+    # A new compilation keeps the planned noise up to the fraction
+    assert len(cap_noise_jobs(jobs, set(), [], 0.5)) == 16
+    assert len(cap_noise_jobs(jobs, set(), [], 0.3)) == 14

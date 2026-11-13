@@ -99,6 +99,8 @@ NOISE_CANDIDATES = 5
 # A few earthquakes in the noise are fine, other transients must stay.
 NOISE_PHASENET_WEIGHTS = "original"
 NOISE_MAX_PHASE_PROBABILITY = 0.5
+# The noise fraction holds per split
+NOISE_FRACTION_GROUP = "split"
 NOISE_MAX_DRAWS = 1000
 # Rounds of noise downloads, each tops up the noise that failed in the round before
 NOISE_MAX_ROUNDS = 3

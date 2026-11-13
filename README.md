@@ -39,13 +39,20 @@ the downloads per data center (done, failed, time left), the logs run above it.
 `--force` moves an existing dataset to a backup folder and compiles it anew.
 
 ```sh
-seisbench-datasets bohemia --check     # or --validate; downloads nothing
+seisbench-datasets bohemia --check            # or --validate; downloads nothing
+seisbench-datasets bohemia --recheck-noise    # PhaseNet over the existing noise
+seisbench-datasets bohemia --export <dir>     # MiniSEED, picks, events for pyrocko
 ```
 
 `--check` reports the event and noise traces per split against `--noise-fraction`,
 traces without waveforms in the HDF5 file, and, for BohemiaSaxony, the event traces
 the catalog plans that are missing, with and without data at the data centers (it
-reads the whole catalog, about a minute).
+reads the whole catalog, about a minute). `--recheck-noise` runs the earthquake
+detection over the noise traces already in the dataset, e.g., noise compiled
+before it, and removes the noise traces with an earthquake and those above the noise
+fraction from the metadata; the next run tops the noise up again. The metadata
+before is kept as `metadata.csv.bak-<time>`, the removed traces are listed in
+`noise_rejected.csv`. `--export` needs pyrocko: `uv sync --extra export`.
 
 ## Use
 

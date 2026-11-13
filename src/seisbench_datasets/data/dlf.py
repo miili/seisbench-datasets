@@ -60,6 +60,8 @@ SAMPLING_RATE = 100.0
 # The data before the window give PhaseNet context.
 NOISE_PHASENET_WEIGHTS = "volpick"
 NOISE_MAX_PHASE_PROBABILITY = 0.5
+# The noise fraction holds per region
+NOISE_FRACTION_GROUP = "source_region"
 NOISE_LEAD = 30.0
 # A rejected noise window is replaced by the one before it, up to this many rejected
 # downloads and this far (s) before the event
@@ -799,6 +801,8 @@ BQ, HS, NH, 1P, 2D, LU), among others.
                     return await self.get_noise_data(job, inv, origin_times[job.region])
                 return await self.get_waveform_data(job, inv)
 
+            # Noise by proportion: not again for windows that were replaced before
+            jobs = cap_noise_jobs(jobs, done, outcomes, self._noise_fraction)
             with_noise, noise_candidates = noise_state(jobs, done, catalogs)
             jobs = [
                 (source, job)
@@ -867,6 +871,39 @@ def resumed_outcomes(metadata: pd.DataFrame) -> list[Outcome]:
         )
         for row in metadata.to_dict("records")
     ]
+
+
+def cap_noise_jobs(
+    jobs: list[tuple[Source, Job]],
+    done: set[str],
+    outcomes: list[Outcome],
+    fraction: float,
+) -> list[tuple[Source, Job]]:
+    """
+    Drops the noise jobs that are not downloaded yet beyond the noise fraction of
+    their region. E.g., a noise window rejected by an earlier compilation was
+    replaced by one at another event trace; downloading it now would exceed the
+    noise fraction. Which windows doesn't matter, the proportion does.
+
+    :param outcomes: Outcomes so far, of the traces in the dataset
+    """
+    events = Counter(job.region for _, job in jobs if job.kind == "event")
+    downloaded = Counter(
+        outcome.region
+        for outcome in outcomes
+        if outcome.kind == "noise" and outcome.status == "downloaded"
+    )
+    allowed = {
+        region: round(fraction * n) - downloaded[region] for region, n in events.items()
+    }
+    kept = []
+    for source, job in jobs:
+        if job.kind == "noise" and job.trace_name not in done:
+            if allowed.get(job.region, 0) <= 0:
+                continue
+            allowed[job.region] -= 1
+        kept.append((source, job))
+    return kept
 
 
 def noise_state(
