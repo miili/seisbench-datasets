@@ -29,6 +29,7 @@ import obspy
 from obspy import Inventory, Stream, UTCDateTime, read_inventory
 from obspy.clients.fdsn.header import FDSNException, FDSNNoDataException
 from obspy.core.inventory import Channel, Network, Station
+from obspy.signal.interpolation import lanczos_interpolation
 from scipy import signal
 from seisbench import logger
 from seisbench.data.base import TraceParameters
@@ -963,31 +964,62 @@ def resample(stream: Stream, sampling_rate: float) -> None:
     """
     Resamples the traces in place with a polyphase filter and the anti-alias filter
     :py:func:`antialias_filter`. Unlike ObsPy's FFT resampling, the filter doesn't
-    depend on the trace length. The first sample keeps its time. Beyond the edges,
-    the traces are padded with their mean, so the offset of raw counts causes no
-    transients.
+    depend on the trace length. The first sample keeps its time, the last sample is
+    the one nearest to the last original sample, so that contiguous segments stay
+    contiguous. Beyond the edges, the traces are padded with their mean, so the
+    offset of raw counts causes no transients. All traces are float64 afterwards.
     """
     for trace in stream:
         if trace.stats.sampling_rate == sampling_rate:
+            # One data type, so that the segments of a channel can be merged
+            trace.data = trace.data.astype(np.float64)
             continue
-        ratio = Fraction(sampling_rate / trace.stats.sampling_rate).limit_denominator(
-            1000
-        )
+        rate = trace.stats.sampling_rate
+        ratio = Fraction(sampling_rate / rate).limit_denominator(1000)
         up, down = ratio.numerator, ratio.denominator
         logger.debug(
-            "Resampling trace %s from %.2f Hz to %.2f Hz.",
+            "Resampling trace %s from %.4f Hz to %.2f Hz.",
             trace.id,
-            trace.stats.sampling_rate,
+            rate,
             sampling_rate,
         )
-        trace.data = signal.resample_poly(
-            trace.data.astype(np.float64),
-            up,
-            down,
-            window=antialias_filter(up, down),
-            padtype="mean",
-        )
+        duration = (trace.stats.npts - 1) / rate
+        npts = int(duration * sampling_rate + 0.5 - 1e-6) + 1
+        data = trace.data.astype(np.float64)
+        if up != down:
+            data = signal.resample_poly(
+                data, up, down, window=antialias_filter(up, down), padtype="mean"
+            )
+        rate *= up / down
+        if abs(rate / sampling_rate - 1.0) * npts > 0.01:
+            # The ratio is approximate, e.g., 1 / 1 for a drifting digitizer at
+            # 100.04 Hz, which would shift the last of 12,000 samples by 5. Lanczos
+            # interpolation corrects the rest, the band is limited already. Padded
+            # with the mean, as the last sample may be up to half a sample later.
+            mean = data.mean()
+            padded = np.pad(data - mean, (0, 20))
+            dt, new_dt = 1.0 / rate, 1.0 / sampling_rate
+            data = (
+                lanczos_interpolation(padded, 0.0, dt, 0.0, new_dt, npts, a=20) + mean
+            )
+        trace.data = data[:npts]
         trace.stats.sampling_rate = sampling_rate
+
+
+def merge_segments(stream: Stream) -> Stream:
+    """
+    Joins segments of a channel that are contiguous up to half a sample, e.g., at a
+    timing correction, and identical overlapping records. Only segments with the
+    same sampling rate are joined: ObsPy can't merge, e.g., a drifting digitizer
+    whose records have 100.0002 and 100.0398 Hz. Join those after resampling.
+    """
+    rates = defaultdict(Stream)
+    for trace in stream:
+        rates[trace.stats.sampling_rate] += trace
+    merged = Stream()
+    for segments in rates.values():
+        merged += segments.merge(method=-1, misalignment_threshold=0.5)
+    return merged
 
 
 async def homogenize_sampling_rate(st: Stream, sampling_rate: float) -> float:
@@ -1020,14 +1052,12 @@ async def get_waveform_array(
     stream = await client.get_waveforms(request)
     if not len(stream):
         raise ValueError(f"No waveforms found for {request}.")
-    stream = select_location(stream, request.location)
-    # Joins segments that are contiguous up to half a sample, e.g., at a timing
-    # correction, and identical overlapping records
-    stream.merge(method=-1, misalignment_threshold=0.5)
+    stream = merge_segments(select_location(stream, request.location))
     seed_id = stream[0].id
 
-    rotate_stream_to_zne(stream, inventory=inventory)
     sampling_rate = await homogenize_sampling_rate(stream, sampling_rate)
+    stream = merge_segments(stream)  # Segments that had different sampling rates
+    rotate_stream_to_zne(stream, inventory=inventory)
 
     stream = stream.slice(starttime, endtime)
     if not len(stream):

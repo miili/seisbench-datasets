@@ -265,13 +265,12 @@ def test_resample_sine(rate):
     trace = stream[0]
     assert trace.stats.sampling_rate == 100.0
     assert trace.stats.starttime == UTCDateTime(0)
-    assert trace.stats.npts == 6000
+    # The last sample is at most half a sample after the last original sample
+    assert -0.01 < trace.times()[-1] - t[-1] <= 0.005
     expected = 1000.0 + np.sin(2 * np.pi * 5.0 * trace.times())
     # Amplitude, phase and offset are kept. The edges settle within 0.2 s.
     np.testing.assert_allclose(trace.data[20:-20], expected[20:-20], atol=1e-3)
-    # For odd rates, the last sample can be after the end of the data
-    inside = trace.times() <= t[-1]
-    np.testing.assert_allclose(trace.data[inside], expected[inside], atol=0.1)
+    np.testing.assert_allclose(trace.data, expected, atol=0.1)
 
 
 @pytest.mark.parametrize("rate", [200.0, 250.0])
@@ -382,3 +381,50 @@ def test_waveform_array_joins_time_tears(second_start, completeness):
     else:
         assert params["trace_completeness"] == completeness
         assert np.allclose(np.diff(data), 1.0)
+
+
+def test_waveform_array_joins_segments_of_different_rates():
+    # AV.WANC 2001-11-26: contiguous records of a drifting digitizer at 100.0002,
+    # 100.0398 and 100.0 Hz, which ObsPy can't merge
+    start = UTCDateTime(2001, 11, 26, 5, 2, 37)
+    rates = (100.0002, 100.0398, 100.0)
+    lengths = (77.0, 14.0, 29.0)
+    segments = []
+    t0 = start
+    for rate, length in zip(rates, lengths, strict=True):
+        t = np.arange(int(length * rate)) / rate
+        segments.append((t0, rate, np.sin(2 * np.pi * 2.0 * (t0 - start + t))))
+        t0 += len(t) / rate
+    stream = Stream(
+        [
+            Trace(
+                # Counts, as from the data center
+                np.round(1000 * data).astype(np.int32),
+                header=dict(
+                    network="AV",
+                    station="WANC",
+                    channel=f"EH{component}",
+                    starttime=t0,
+                    sampling_rate=rate,
+                ),
+            )
+            for component in "ZNE"
+            for t0, rate, data in segments
+        ]
+    )
+
+    class Client:
+        async def get_waveforms(self, request):
+            return stream.copy()
+
+    request = WaveformRequest("AV", "WANC", "", "EH?", start, start + 119.0)
+    _, params, data = asyncio.run(
+        get_waveform_array(Client(), Inventory(), request, 100.0, "ZNE")
+    )
+    assert params["trace_sampling_rate_hz"] == 100.0
+    assert params["trace_completeness"] == 1.0
+    # One continuous sine. The segments are aligned to the common sample grid, by
+    # up to half a sample: 5 ms, 63 counts at 2 Hz. Without correcting the rate of
+    # 100.0398 Hz, the second segment would drift by 0.6 samples.
+    expected = 1000 * np.sin(2 * np.pi * 2.0 * np.arange(data.shape[1]) / 100.0)
+    assert np.abs(data - expected).max() < 63
