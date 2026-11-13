@@ -941,15 +941,20 @@ ANTIALIAS_ATTENUATION = 80.0  # dB
 @functools.lru_cache
 def antialias_filter(up: int, down: int) -> np.ndarray:
     """
-    Linear-phase low-pass FIR filter (Remez) for resampling by ``up / down``. The
-    passband ends at :py:data:`ANTIALIAS_PASSBAND` times the lower of the two
-    Nyquist frequencies, the stopband starts at it. Frequencies are relative to the
-    upsampled rate. The filter has an odd length, so it doesn't shift the samples.
+    Linear-phase low-pass FIR filter (Kaiser window) for resampling by
+    ``up / down``. The passband ends at :py:data:`ANTIALIAS_PASSBAND` times the lower
+    of the two Nyquist frequencies, the stopband starts at it. Frequencies are
+    relative to the upsampled rate. The filter has an odd length, so it doesn't
+    shift the samples. Not Remez: for rates close to the target, e.g., 100.16 Hz
+    (``up / down = 624 / 625``), the filter has 20,000 taps, and Remez returns NaN
+    or doesn't converge.
     """
     nyquist = 0.5 / max(up, down)
-    edges = [0.0, ANTIALIAS_PASSBAND * nyquist, nyquist, 0.5]
-    numtaps, _ = signal.kaiserord(ANTIALIAS_ATTENUATION, (edges[2] - edges[1]) / 0.5)
-    taps = signal.remez(numtaps | 1, edges, [1.0, 0.0], fs=1.0)
+    width = (1.0 - ANTIALIAS_PASSBAND) * nyquist
+    numtaps, beta = signal.kaiserord(ANTIALIAS_ATTENUATION, width / 0.5)
+    taps = signal.firwin(
+        numtaps | 1, nyquist - width / 2, window=("kaiser", beta), fs=1.0
+    )
     taps.flags.writeable = False  # Shared by the cache
     return taps
 

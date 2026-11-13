@@ -254,7 +254,9 @@ def test_resample_independent_of_length():
     )
 
 
-@pytest.mark.parametrize("rate", [200.0, 250.0])
+# Rates close to 100 Hz, as of old AV and UW stations, need long filters. Remez
+# returned NaN for 100.16 Hz and didn't converge for 100.2 Hz.
+@pytest.mark.parametrize("rate", [200.0, 250.0, 100.16, 100.2])
 def test_resample_sine(rate):
     t = np.arange(int(60 * rate)) / rate
     trace = Trace(1000.0 + np.sin(2 * np.pi * 5.0 * t), header=dict(sampling_rate=rate))
@@ -267,7 +269,9 @@ def test_resample_sine(rate):
     expected = 1000.0 + np.sin(2 * np.pi * 5.0 * trace.times())
     # Amplitude, phase and offset are kept. The edges settle within 0.2 s.
     np.testing.assert_allclose(trace.data[20:-20], expected[20:-20], atol=1e-3)
-    np.testing.assert_allclose(trace.data, expected, atol=0.1)
+    # For odd rates, the last sample can be after the end of the data
+    inside = trace.times() <= t[-1]
+    np.testing.assert_allclose(trace.data[inside], expected[inside], atol=0.1)
 
 
 @pytest.mark.parametrize("rate", [200.0, 250.0])
