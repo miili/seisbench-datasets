@@ -35,6 +35,8 @@ from seisbench_datasets.data.multiclient import (
 from seisbench_datasets.data.noise import (
     NOISE_GAP_BEFORE_EVENT,
     EarthquakeDetector,
+    NotQuietError,
+    check_complete,
     is_away_from_events,
 )
 from seisbench_datasets.data.resume import ResumableBenchmarkDataset
@@ -79,12 +81,6 @@ RNG_SEED = 31337
 
 Kind = Literal["event", "noise"]
 Status = Literal["downloaded", "failed", "no_source", "near_event", "not_quiet"]
-
-
-class NotQuietError(Exception):
-    """
-    A noise window has gaps or an earthquake phase.
-    """
 
 
 class NoNoiseWindowError(Exception):
@@ -1069,12 +1065,7 @@ def check_quiet(
     :param completeness: Fraction of the samples that contain data
     :param window_start: First sample of the window in ``data``
     """
-    has_data = np.ptp(data, axis=1) > 0
-    if not has_data.any():
-        raise NotQuietError("No component has data.")
-    # Missing components count as incomplete, so compare with the components we have
-    if completeness < has_data.sum() / len(data) - 1e-3:
-        raise NotQuietError(f"The window has gaps, completeness {completeness:.3f}.")
+    check_complete(data, completeness)
     if sampling_rate != detector.sampling_rate:
         raise ValueError(
             f"The detector needs {detector.sampling_rate} Hz, not {sampling_rate} Hz."

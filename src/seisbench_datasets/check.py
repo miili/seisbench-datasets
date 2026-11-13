@@ -13,7 +13,7 @@ import h5py
 import pandas as pd
 from rich.table import Table
 
-from seisbench_datasets.data.resume import NO_DATA_FILE, NoDataLog
+from seisbench_datasets.data.resume import NO_DATA_FILE, NoDataLog, trace_names
 from seisbench_datasets.progress import console
 
 COLUMNS = {"trace_name", "trace_name_original", "trace_category", "split"}
@@ -49,39 +49,24 @@ class CheckReport(NamedTuple):
         return not self.unreadable
 
 
-def trace_names(metadata: pd.DataFrame) -> pd.Series:
-    """
-    The original names of the traces, also of those written into buckets.
-    """
-    names = metadata["trace_name"]
-    if "trace_name_original" in metadata:
-        original = metadata["trace_name_original"]
-        names = original.where(original != "", names)
-    return names
-
-
 def check_dataset(
     path: Path,
     noise_fraction: float,
     planned: set[str] | None = None,
-    partial: bool = False,
 ) -> CheckReport:
     """
     :param path: Dataset folder, with ``metadata.csv`` and ``waveforms.hdf5``
     :param planned: Names of the event traces the dataset should contain
-    :param partial: Check the ``.partial`` files of an interrupted compilation, up
-        to its last checkpoint
     """
-    suffix = ".partial" if partial else ""
     metadata = pd.read_csv(
-        path / f"metadata.csv{suffix}",
+        path / "metadata.csv",
         dtype=str,
         keep_default_na=False,
         usecols=lambda column: column in COLUMNS,
     )
     names = trace_names(metadata)
 
-    with h5py.File(path / f"waveforms.hdf5{suffix}", "r") as file:
+    with h5py.File(path / "waveforms.hdf5", "r") as file:
         datasets = set(file["data"])
     # Traces in buckets are named bucket<i>$<location>
     unreadable = names[~metadata["trace_name"].str.split("$").str[0].isin(datasets)]

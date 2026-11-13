@@ -2,7 +2,7 @@
 Extracts the swarm (busy) periods from the BohemiaSaxony catalog.
 
 Noise traces for BohemiaSaxony are taken from quiet periods only, outside the
-windows written here, see ROADMAP.md. A day is busy if it has at least
+windows written here, see ``BohemiaSaxony``. A day is busy if it has at least
 ``--busy`` catalog events. Busy days at most ``--gap`` quiet days apart form one
 window, windows with fewer than ``--min-events`` events are dropped, and each
 window is padded by ``--pad`` days on both sides.

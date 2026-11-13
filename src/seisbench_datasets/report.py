@@ -162,11 +162,16 @@ def _times(values: pd.Series) -> list:
     return [None if pd.isna(v) else v.strftime("%Y-%m-%d %H:%M:%S") for v in values]
 
 
-def _splits(frame: pd.DataFrame) -> list[str]:
-    present = set(frame["split"].dropna())
+def _split_order(splits) -> list[str]:
+    """Train, dev and test first, then other splits by name."""
+    present = set(splits)
     return [split for split in SPLITS if split in present] + sorted(
         present - set(SPLITS)
     )
+
+
+def _splits(frame: pd.DataFrame) -> list[str]:
+    return _split_order(frame["split"].dropna())
 
 
 def _split_color(split: str) -> str:
@@ -262,9 +267,7 @@ def _split_bars(
     """Bars of categories (index) per split (columns)."""
     categories = [str(c) for c in counts.index]
     data = []
-    for split in [s for s in SPLITS if s in counts] + [
-        s for s in counts if s not in SPLITS
-    ]:
+    for split in _split_order(counts.columns):
         values = _list(counts[split], 2 if percent else None)
         bar = {
             "type": "bar",
@@ -436,7 +439,7 @@ def _per_year(events: pd.DataFrame) -> dict:
     return figure
 
 
-def _stations_map(m: pd.DataFrame, stations: pd.DataFrame, events) -> dict:
+def _stations_map(stations: pd.DataFrame, events: pd.DataFrame | None) -> dict:
     count = stations["event_traces"].to_numpy(float)
     log_count = np.log10(np.maximum(count, 1))
     top = max(1, int(np.ceil(log_count.max())))
@@ -583,30 +586,26 @@ def _pick_availability(traces: pd.DataFrame) -> dict:
     return _split_bars(percent, "Share of the event traces (%)", percent=True)
 
 
-def _single_bars(values: pd.Series, title: str, horizontal: bool = True) -> dict:
+def _single_bars(values: pd.Series, title: str) -> dict:
+    """Horizontal bars of categories (index), in one color."""
     categories = [str(c) for c in values.index]
-    bar = {
-        "type": "bar",
-        "marker": {"color": NEUTRAL_COLOR},
-        "hovertemplate": "%{y}: %{x:,}<extra></extra>"
-        if horizontal
-        else "%{x}: %{y:,}<extra></extra>",
-    }
-    if horizontal:
-        bar.update(orientation="h", y=categories, x=_list(values))
-    else:
-        bar.update(x=categories, y=_list(values))
-    category_axis = {"type": "category", "automargin": True}
-    if horizontal:
-        category_axis["autorange"] = "reversed"
     return {
-        "data": [bar],
+        "data": [
+            {
+                "type": "bar",
+                "orientation": "h",
+                "y": categories,
+                "x": _list(values),
+                "marker": {"color": NEUTRAL_COLOR},
+                "hovertemplate": "%{y}: %{x:,}<extra></extra>",
+            }
+        ],
         "layout": {
             "showlegend": False,
-            "xaxis": {"title": {"text": title}} if horizontal else category_axis,
-            "yaxis": category_axis if horizontal else {"title": {"text": title}},
+            "xaxis": {"title": {"text": title}},
+            "yaxis": {"type": "category", "automargin": True, "autorange": "reversed"},
         },
-        "height": max(300, 22 * len(categories) + 100) if horizontal else None,
+        "height": max(300, 22 * len(categories) + 100),
     }
 
 
@@ -962,12 +961,10 @@ def write_report(
             for split in _splits(m)
         }
     )
-    noise_figure = _split_bars(noise_percent, "Noise / event traces (%)", percent=True)
-    if group == "split":  # One bar per split, centered, in split order
+    if group == "split":  # One bar per split, in split order
         noise_percent = noise_percent.loc[_splits(m)]
-        noise_figure = _split_bars(
-            noise_percent, "Noise / event traces (%)", percent=True
-        )
+    noise_figure = _split_bars(noise_percent, "Noise / event traces (%)", percent=True)
+    if group == "split":  # Centered: each category has a bar of one split only
         noise_figure["layout"]["barmode"] = "overlay"
     if noise_fraction is not None:
         noise_figure["layout"]["shapes"] = [
@@ -1098,7 +1095,7 @@ def write_report(
         "Stations",
         f"{len(stations):,} stations, colored by event traces (log scale), "
         "with the events in gray.",
-        _stations_map(m, stations, events),
+        _stations_map(stations, events),
         wide=True,
     )
     per_station = pd.crosstab(traces["station"], traces["split"])

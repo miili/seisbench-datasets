@@ -17,13 +17,9 @@ from datetime import datetime
 from fnmatch import fnmatch
 from fractions import Fraction
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Literal,
-    NamedTuple,
-    TypeVar,
-)
+from typing import Literal, NamedTuple, TypeVar
 
+import aiohttp
 import numpy as np
 import obspy
 from obspy import Inventory, Stream, UTCDateTime, read_inventory
@@ -41,20 +37,6 @@ from seisbench.util.trace_ops import (
 
 from seisbench_datasets.cache import cache_root
 from seisbench_datasets.progress import DownloadProgress
-
-if TYPE_CHECKING:
-    import aiohttp
-
-
-def _import_aiohttp():
-    try:
-        import aiohttp
-    except ImportError as exc:
-        raise ImportError(
-            "Compiling datasets from FDSN web services requires "
-            "aiohttp. Install it with `pip install aiohttp`."
-        ) from exc
-    return aiohttp
 
 
 def _import_hinetpy():
@@ -215,7 +197,6 @@ class FDSNSource(Source):
         """
         if not self.eida_token:
             return
-        aiohttp = _import_aiohttp()
 
         url = f"{self.base_url}/fdsnws/dataselect/1/auth"
         if not url.startswith("https://"):
@@ -242,7 +223,6 @@ class FDSNSource(Source):
 
         :return: The response body, or None if there are no data
         """
-        aiohttp = _import_aiohttp()
         for attempt in range(self.retries + 1):
             try:
                 return await self._get_once(session, url, params, **kwargs)
@@ -377,7 +357,6 @@ class MultiClient:
         self._session: aiohttp.ClientSession | None = None
 
     async def __aenter__(self) -> MultiClient:
-        aiohttp = _import_aiohttp()
         self._session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(sock_connect=30, sock_read=120),
         )
@@ -1022,18 +1001,6 @@ def merge_segments(stream: Stream) -> Stream:
     return merged
 
 
-async def homogenize_sampling_rate(st: Stream, sampling_rate: float) -> float:
-    """
-    Homogenizes the sampling rate of the stream to the given sampling rate, see
-    :py:func:`resample`. Resamples in a thread.
-    """
-    if sampling_rate <= 0.0:
-        sampling_rate = st[0].stats.sampling_rate
-    if any(trace.stats.sampling_rate != sampling_rate for trace in st):
-        await asyncio.to_thread(resample, st, sampling_rate)
-    return sampling_rate
-
-
 async def get_waveform_array(
     client: MultiClient,
     inventory: Inventory,
@@ -1055,7 +1022,8 @@ async def get_waveform_array(
     stream = merge_segments(select_location(stream, request.location))
     seed_id = stream[0].id
 
-    sampling_rate = await homogenize_sampling_rate(stream, sampling_rate)
+    if any(trace.stats.sampling_rate != sampling_rate for trace in stream):
+        await asyncio.to_thread(resample, stream, sampling_rate)
     stream = merge_segments(stream)  # Segments that had different sampling rates
     rotate_stream_to_zne(stream, inventory=inventory)
 

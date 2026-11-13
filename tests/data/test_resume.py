@@ -142,23 +142,6 @@ def test_compile_force(tmp_path):
     assert file.read_text() == "fresh"
 
 
-def test_compile_adopts_partial_files(tmp_path):
-    # Interrupted by an earlier version, which compiled into .partial files
-    file = tmp_path / "metadata.csv"
-    (tmp_path / "metadata.csv.partial").write_text("progress")
-    calls = []
-
-    def callback(paths):
-        calls.append(paths[0].read_text())
-        paths[0].write_text("progress done")
-
-    compile_in_place([file], callback)
-    assert calls == ["progress"]
-    assert file.read_text() == "progress done"
-    assert not (tmp_path / "metadata.csv.partial").exists()
-    assert not (tmp_path / "metadata.csv.incomplete").exists()
-
-
 def test_no_data_log(tmp_path):
     path = tmp_path / "no_data.csv"
     log = NoDataLog(path)
@@ -178,7 +161,7 @@ def test_move_to_backup(tmp_path):
     assert move_to_backup(dataset) is None
 
     dataset.mkdir()
-    (dataset / "metadata.csv.partial").write_text("progress")
+    (dataset / "metadata.csv").write_text("progress")
     if LOCKING:
         # A running download holds the lock: its folder must not be moved
         lock = try_lock(dataset / "metadata.csv")
@@ -189,7 +172,7 @@ def test_move_to_backup(tmp_path):
 
     backup = move_to_backup(dataset)
     assert not dataset.exists()
-    assert (backup / "metadata.csv.partial").read_text() == "progress"
+    assert (backup / "metadata.csv").read_text() == "progress"
 
 
 class _ToyDataset(ResumableBenchmarkDataset):

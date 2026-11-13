@@ -9,7 +9,7 @@ from datetime import datetime
 from importlib import resources
 from itertools import groupby
 from pathlib import Path
-from typing import Literal, NamedTuple, cast
+from typing import Literal, NamedTuple
 from urllib.parse import urljoin
 from zipfile import ZipFile
 
@@ -44,7 +44,7 @@ from seisbench_datasets.data.noise import (
     check_complete,
     is_away_from_events,
 )
-from seisbench_datasets.data.resume import ResumableBenchmarkDataset
+from seisbench_datasets.data.resume import ResumableBenchmarkDataset, trace_names
 
 REMOVE_CHANNELS = {
     "HHT",  # Stray channel or typo
@@ -266,8 +266,6 @@ Seismic Networks:
             self._client,
             self.path / "inventory.xml",
             stations=get_stations(catalog),
-            # starttime=starttime,
-            # endtime=endtime,
             force_download=force_download,
         )
 
@@ -295,7 +293,6 @@ Seismic Networks:
         event_params: EventParameters,
         picks: list[Pick],
         inventory: Inventory,
-        sampling_rate: float = 100.0,
         time_before: float = 60.0,
         time_after: float = 60.0,
     ) -> tuple[TraceParameters, np.ndarray]:
@@ -322,7 +319,7 @@ Seismic Networks:
             self._client,
             inventory,
             request,
-            sampling_rate=sampling_rate,
+            sampling_rate=SAMPLING_RATE,
             component_order=COMPONENT_ORDER,
         )
         trace_params.update(waveform_params)
@@ -684,10 +681,7 @@ def anchors_from_metadata(metadata: pd.DataFrame) -> tuple[list[Anchor], Counter
     """
     if metadata.empty:
         return [], Counter()
-    names = metadata["trace_name"]
-    if "trace_name_original" in metadata:
-        original = metadata["trace_name_original"]
-        names = original.where(original != "", names)
+    names = trace_names(metadata)
     category = metadata.get("trace_category", pd.Series("", index=metadata.index))
     is_noise = category == "noise"
     noise = Counter(metadata.loc[is_noise, "split"])
@@ -793,42 +787,17 @@ def _station_key(pick: Pick) -> tuple[str, str, str]:
     )
 
 
-def get_catalog_timerange(catalog: Catalog) -> tuple[datetime, datetime]:
-    """
-    Get the time range of the catalog.
-
-    :param catalog: Catalog to get the time range from
-    :return: Start and end time of the catalog
-    """
-    tmin = datetime.max
-    tmax = datetime.min
-
-    for ev in catalog:
-        ev = cast(Event, ev)
-        origin = ev.preferred_origin()
-        tmin = min(tmin, origin.time.datetime)
-        tmax = max(tmax, origin.time.datetime)
-
-    return tmin, tmax
-
-
 def get_stations(catalog: Catalog) -> set[str]:
     """
-    Get the networks and stations from the catalog.
-
-    :param catalog: Catalog to get the networks and stations from
-    :return: Dictionary with networks as keys and sets of stations as values
+    The station codes of the catalog picks, as the FDSN station names that
+    :py:func:`fixup_catalog` maps them to.
     """
     stations = set()
-
-    for ev in catalog:
-        ev = cast(Event, ev)
-        for pick in ev.picks:
+    for event in catalog:
+        for pick in event.picks:
             if pick.waveform_id is not None:
                 station = pick.waveform_id.station_code
-                # Request the FDSN station names that fixup_catalog maps to
                 stations.add(STATION_MAPPING.get(station, station))
-
     return stations
 
 
@@ -896,7 +865,6 @@ def get_station_params(
         ) from r
 
     return TraceParameters(
-        trace_name="foo",
         station_network_code=waveform_id.network_code,
         station_code=waveform_id.station_code,
         trace_channel=waveform_id.channel_code[:2],

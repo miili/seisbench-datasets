@@ -15,11 +15,10 @@ large for SeisBench itself.
   subclasses SeisBench's `WaveformDataWriter`; `compile_in_place` holds a lock and
   marks the dataset incomplete (`metadata.csv.incomplete`) while compiling;
   `ResumableBenchmarkDataset` compiles before SeisBench's cache check, continues an
-  incomplete dataset, and with `update=True` a complete one. No `.partial` files
-  (those of older versions are adopted). Dataset `_download_dataset` methods must
-  skip `writer.resumed_trace_names` and `writer.no_data`, record
-  `FDSNNoDataException` (HTTP 204 / 404 only) with `writer.no_data.add`, and pass
-  `writer.checkpoint` to `download_parallel`.
+  incomplete dataset, and with `update=True` a complete one. Dataset
+  `_download_dataset` methods must skip `writer.resumed_trace_names` and
+  `writer.no_data`, record `FDSNNoDataException` (HTTP 204 / 404 only) with
+  `writer.no_data.add`, and pass `writer.checkpoint` to `download_parallel`.
 - `src/seisbench_datasets/data/bohemia.py`, `dlf.py`: the datasets.
 - `scripts/bohemia_swarms.py` writes `src/seisbench_datasets/data/bohemia_swarms.csv`, the
   swarm windows of the Bohemia catalog. Edit the parameters there, not the CSV by hand.

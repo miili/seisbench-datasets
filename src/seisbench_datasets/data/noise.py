@@ -15,6 +15,12 @@ NOISE_GAP_BEFORE_EVENT = 120.0
 NOISE_GAP_AFTER_EVENT = 180.0
 
 
+class NotQuietError(ValueError):
+    """
+    A noise window has gaps or an earthquake phase.
+    """
+
+
 def is_away_from_events(
     origin_times: list[float], starttime: UTCDateTime, endtime: UTCDateTime
 ) -> bool:
@@ -31,17 +37,18 @@ def is_away_from_events(
 
 def check_complete(data: np.ndarray, completeness: float) -> None:
     """
-    Raises ValueError if no component has data, or if the components with data have
-    gaps. Components without data are allowed, as in the event traces.
+    Raises :py:class:`NotQuietError` if no component has data, or if the components
+    with data have gaps. Components without data are allowed, as in the event
+    traces.
 
     :param completeness: Fraction of the samples that contain data
     """
     has_data = np.ptp(data, axis=1) > 0
     if not has_data.any():
-        raise ValueError("No component has data.")
+        raise NotQuietError("No component has data.")
     # Missing components count as incomplete, so compare with the components we have
     if completeness < has_data.sum() / len(data) - 1e-3:
-        raise ValueError(f"The window has gaps, completeness {completeness:.3f}.")
+        raise NotQuietError(f"The window has gaps, completeness {completeness:.3f}.")
 
 
 class EarthquakeDetector:

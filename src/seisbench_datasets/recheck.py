@@ -18,9 +18,8 @@ import numpy as np
 import pandas as pd
 from rich.progress import track
 
-from seisbench_datasets.check import trace_names
 from seisbench_datasets.data.noise import EarthquakeDetector
-from seisbench_datasets.data.resume import _adopt_partial_files, try_lock
+from seisbench_datasets.data.resume import trace_names, try_lock
 from seisbench_datasets.progress import console
 
 NOISE_REJECTED_FILE = "noise_rejected.csv"
@@ -89,7 +88,6 @@ def recheck_noise(
     if lock is None:
         raise RuntimeError(f"A compilation into {metadata_path.parent} is running.")
     try:
-        _adopt_partial_files(files)
         metadata = pd.read_csv(metadata_path, dtype=str, keep_default_na=False)
         if "trace_category" not in metadata:
             return RecheckResult(0, [], None)

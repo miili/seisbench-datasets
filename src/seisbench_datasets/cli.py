@@ -135,6 +135,34 @@ def _prepare(
     return True
 
 
+def _compiled_files(dataset: type) -> list[Path]:
+    """
+    The files of the dataset, exits if it isn't compiled.
+    """
+    files = dataset.files()
+    if not all(file.is_file() for file in files):
+        console.print(f"[red]{dataset._path_internal()} has no compiled dataset.")
+        raise typer.Exit(1)
+    return files
+
+
+def _status(files: list[Path]) -> str:
+    """
+    ``compiling``, ``incomplete`` (interrupted) or ``complete``. Read-only: leaves no
+    lock file behind.
+    """
+    from seisbench_datasets.data.resume import incomplete_marker, try_lock
+
+    lock_existed = Path(f"{files[0]}.lock").exists()
+    lock = try_lock(files[0])
+    if lock is None:
+        return "compiling"
+    lock.close()
+    if not lock_existed:
+        Path(lock.name).unlink(missing_ok=True)
+    return "incomplete" if incomplete_marker(files).exists() else "complete"
+
+
 def _export(dataset: type, directory: Path) -> None:
     from seisbench_datasets.data.resume import try_lock
 
@@ -146,10 +174,7 @@ def _export(dataset: type, directory: Path) -> None:
         )
         raise typer.Exit(1) from exc
 
-    files = dataset.files()
-    if not all(file.is_file() for file in files):
-        console.print(f"[red]{dataset._path_internal()} has no compiled dataset.")
-        raise typer.Exit(1)
+    files = _compiled_files(dataset)
     lock = try_lock(files[0])
     if lock is None:
         console.print(f"[red]A compilation into {dataset._path_internal()} is running.")
@@ -163,8 +188,6 @@ def _export(dataset: type, directory: Path) -> None:
 
 
 def _report(dataset: type, module, directory: Path, noise_fraction: float) -> None:
-    from seisbench_datasets.data.resume import incomplete_marker, try_lock
-
     try:
         from seisbench_datasets.report import write_report
     except ImportError as exc:
@@ -175,20 +198,12 @@ def _report(dataset: type, module, directory: Path, noise_fraction: float) -> No
 
     files = dataset.files()
     path = dataset._path_internal()
-    if not files[0].is_file():
+    if not files[0].is_file():  # The report reads the metadata only
         console.print(f"[red]{path} has no compiled dataset.")
         raise typer.Exit(1)
     # A running compilation replaces metadata.csv at each checkpoint, atomically,
     # so the report shows it up to the last one
-    lock_existed = Path(f"{files[0]}.lock").exists()
-    lock = try_lock(files[0])
-    if lock is None:
-        status = "compiling"
-    else:
-        lock.close()
-        if not lock_existed:  # Read-only: leave no lock file behind
-            Path(lock.name).unlink(missing_ok=True)
-        status = "incomplete" if incomplete_marker(files).exists() else "complete"
+    status = _status(files)
     with console.status("Writing the report"):
         index = write_report(
             path,
@@ -213,14 +228,7 @@ def _recheck_noise(dataset: type, module, noise_fraction: float) -> None:
         recheck_noise,
     )
 
-    files = dataset.files()
-    partial = [file.parent / (file.name + ".partial") for file in files]
-    if not all(file.is_file() for file in files) and not all(
-        file.is_file() for file in partial
-    ):
-        console.print(f"[red]{dataset._path_internal()} has no compiled dataset.")
-        raise typer.Exit(1)
-
+    files = _compiled_files(dataset)
     weights = module.NOISE_PHASENET_WEIGHTS
     detector = EarthquakeDetector(weights, module.COMPONENT_ORDER)
     group = module.NOISE_FRACTION_GROUP
@@ -258,33 +266,20 @@ def _recheck_noise(dataset: type, module, noise_fraction: float) -> None:
 
 def _check(dataset: type, noise_fraction: float) -> None:
     from seisbench_datasets.check import check_dataset, print_report
-    from seisbench_datasets.data.resume import incomplete_marker, try_lock
 
     path = dataset._path_internal()
-    files = dataset.files()
-    # Files of an interrupted compilation of an earlier version
-    partial = not all(file.is_file() for file in files) and all(
-        (file.parent / (file.name + ".partial")).is_file() for file in files
-    )
-    if not partial and not all(file.is_file() for file in files):
-        console.print(f"[red]{path} has no compiled dataset.")
-        raise typer.Exit(1)
-    lock_existed = Path(f"{files[0]}.lock").exists()
-    lock = try_lock(files[0])
-    if lock is None:
+    status = _status(_compiled_files(dataset))
+    if status == "compiling":
         console.print(f"[red]A compilation into {path} is running.")
         raise typer.Exit(1)
-    lock.close()
-    if not lock_existed:  # Read-only: leave no lock file behind
-        Path(lock.name).unlink(missing_ok=True)
-    if partial or incomplete_marker(files).exists():
+    if status == "incomplete":
         console.print(
             "[yellow]The compilation was interrupted, checking up to its last "
             "checkpoint. Run the command without --check to continue it."
         )
     with console.status("Planning the traces from the catalog"):
         planned = dataset.planned_trace_names()
-    report = check_dataset(path, noise_fraction, planned, partial=partial)
+    report = check_dataset(path, noise_fraction, planned)
     print_report(report)
     if not report.ok:
         raise typer.Exit(1)

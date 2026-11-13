@@ -23,12 +23,9 @@ class _Detector:
         return 0.9 if data.max() >= 5 else 0.1
 
 
-def _write(path, bucket_size, partial=False):
-    suffix = ".partial" if partial else ""
+def _write(path, bucket_size):
     files = [path / "metadata.csv", path / "waveforms.hdf5"]
-    with ResumableWriter(
-        path / f"metadata.csv{suffix}", path / f"waveforms.hdf5{suffix}"
-    ) as writer:
+    with ResumableWriter(*files) as writer:
         writer.bucket_size = bucket_size
         writer.data_format = {"dimension_order": "CW", "component_order": "ZNE"}
         for i in range(4):
@@ -96,14 +93,6 @@ def test_read_waveforms(tmp_path):
                 i = int(original[-1])
                 assert data.shape == (3, 100 + i)  # Without the bucket padding
                 assert (data == i).all()
-
-
-def test_recheck_adopts_partial_files(tmp_path):
-    files = _write(tmp_path, bucket_size=1024, partial=True)
-    result = recheck_noise(files, _Detector(), threshold=0.5)
-    assert len(result.removed) == 1
-    assert all(file.is_file() for file in files)
-    assert (tmp_path / "metadata.csv.incomplete").exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Without fcntl, nothing is locked")

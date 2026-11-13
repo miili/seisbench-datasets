@@ -32,6 +32,18 @@ from tqdm import tqdm
 NO_DATA_FILE = "no_data.csv"
 
 
+def trace_names(metadata: pd.DataFrame) -> pd.Series:
+    """
+    The original names of the traces. Traces written into buckets are renamed to
+    ``bucket<i>$<location>`` and keep their name in ``trace_name_original``.
+    """
+    names = metadata["trace_name"]
+    if "trace_name_original" in metadata:
+        original = metadata["trace_name_original"]
+        names = original.where(original.notna() & (original != ""), names)
+    return names
+
+
 class NoDataLog:
     """
     The traces whose download failed because the data center has no data (HTTP 204
@@ -95,12 +107,7 @@ class ResumableWriter(WaveformDataWriter):
                 self.metadata_path, dtype=str, keep_default_na=False
             )
             self._metadata = self.resumed_metadata.to_dict("records")
-            names = self.resumed_metadata["trace_name"]
-            if "trace_name_original" in self.resumed_metadata:
-                # Traces in buckets keep their name in trace_name_original
-                original = self.resumed_metadata["trace_name_original"]
-                names = original.where(original != "", names)
-            self.resumed_trace_names = set(names)
+            self.resumed_trace_names = set(trace_names(self.resumed_metadata))
         if self.waveforms_path.is_file() and self.waveforms_path.stat().st_size > 0:
             self._waveform_file = h5py.File(self.waveforms_path, "a")
             buckets = [
@@ -223,23 +230,6 @@ def is_complete(files: Sequence[Path]) -> bool:
     )
 
 
-def _adopt_partial_files(files: Sequence[Path]) -> None:
-    """
-    Earlier versions compiled into ``.partial`` files and moved them into place at
-    the end. Their files of an interrupted compilation are continued in place.
-    """
-    partial_files = [file.parent / (file.name + ".partial") for file in files]
-    if any(file.exists() for file in files) or not any(
-        file.is_file() for file in partial_files
-    ):
-        return
-    logger.info("Continuing the partial files of an interrupted compilation.")
-    incomplete_marker(files).touch()
-    for partial_file, file in zip(partial_files, files, strict=True):
-        if partial_file.is_file():
-            partial_file.rename(file)
-
-
 def compile_in_place(
     files: Sequence[Path],
     callback: Callable[[list[Path]], None],
@@ -286,7 +276,6 @@ def compile_in_place(
         if is_complete(files) and not update:  # Finished by the process we waited for
             lock.close()
             return
-        _adopt_partial_files(files)
         exists = any(file.exists() for file in files)
         if exists and force and not is_complete(files):
             logger.info("Compiling the incomplete dataset anew.")
