@@ -274,10 +274,15 @@ class ResumableBenchmarkDataset(WaveformBenchmarkDataset):
                 force=force,
                 wait_for_file=wait_for_file,
             )
+            if not all(file.is_file() for file in files):
+                raise RuntimeError(
+                    f"Compiling {type(self).__name__} wrote no traces, see the log."
+                )
 
+        # SeisBench must not compile itself, its writer can't resume
         super().__init__(
             wait_for_file=wait_for_file,
-            compile_from_source=compile_from_source,
+            compile_from_source=False,
             download_kwargs=download_kwargs,
             **kwargs,
         )
