@@ -67,7 +67,9 @@ first to get the live table there, too.
   taken at random times in quiet periods, not selected by STA/LTA: outside the swarm
   windows in `src/seisbench_datasets/data/bohemia_swarms.csv` (from
   `scripts/bohemia_swarms.py`), away from catalog events, within 30 days of an event
-  at the same station.
+  at the same station. Windows in which PhaseNet (`original` weights) detects an
+  earthquake are skipped. DeepLowFrequency rejects its noise windows the same way,
+  with the `volpick` weights, which also detect long-period events.
 - **DeepLowFrequency**: Hi-net data may not be redistributed. Hi-net downloads are
   cached in blocks of 5 minutes in `~/.cache/seisbench-datasets/hinet/` (or
   `$SEISBENCH_DATASETS_CACHE`), so compiling again with other windows reuses them.

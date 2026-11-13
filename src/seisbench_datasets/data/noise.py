@@ -44,17 +44,15 @@ def check_complete(data: np.ndarray, completeness: float) -> None:
         raise ValueError(f"The window has gaps, completeness {completeness:.3f}.")
 
 
-# PhaseNet trained on volcano-tectonic and long-period events (Zhong & Tan, 2024)
-PHASENET_WEIGHTS = "volpick"
-
-
 class EarthquakeDetector:
     """
     Detects earthquake phases in a noise window with PhaseNet, a deep-learning
     picker, so that only windows with earthquakes are rejected, not those with other
-    transients, e.g., spikes, traffic or wind. Uses the ``volpick`` weights, which
-    also detect long-period events.
+    transients, e.g., spikes, traffic or wind.
 
+    :param weights: PhaseNet weights, ``volpick`` (Zhong & Tan, 2024, trained on
+        volcano-tectonic and long-period events) for DeepLowFrequency, ``original``
+        (Zhu & Beroza, 2019) for local earthquakes in BohemiaSaxony
     :param component_order: Component order of the data
     :param clip: Clip each component at this many robust standard deviations (MAD)
         around its median before the detection. Gaussian noise never reaches it,
@@ -63,11 +61,14 @@ class EarthquakeDetector:
         normalization, as ``volpick``. None disables it.
     """
 
-    def __init__(self, component_order: str = "ZNE", clip: float | None = 20.0):
+    def __init__(
+        self, weights: str, component_order: str = "ZNE", clip: float | None = 20.0
+    ):
         import seisbench.models as sbm
 
+        self.weights = weights
         self.clip = clip
-        self._model = sbm.PhaseNet.from_pretrained(PHASENET_WEIGHTS)
+        self._model = sbm.PhaseNet.from_pretrained(weights)
         self._model.eval()
         self._order = [component_order.index(c) for c in self._model.component_order]
         self._phases = [self._model.labels.index(phase) for phase in "PS"]

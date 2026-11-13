@@ -58,6 +58,7 @@ SAMPLING_RATE = 100.0
 # Noise windows are rejected if PhaseNet detects a P or S phase in them above the
 # probability. A few earthquakes in the noise are fine, other transients must stay.
 # The data before the window give PhaseNet context.
+NOISE_PHASENET_WEIGHTS = "volpick"
 NOISE_MAX_PHASE_PROBABILITY = 0.5
 NOISE_LEAD = 30.0
 # A rejected noise window is replaced by the one before it, up to this many rejected
@@ -754,7 +755,7 @@ BQ, HS, NH, 1P, 2D, LU), among others.
             logger.info("Resuming: %d traces are already downloaded.", len(done))
         self._detector = None
         if self._noise_fraction > 0:
-            self._detector = EarthquakeDetector(COMPONENT_ORDER)
+            self._detector = EarthquakeDetector(NOISE_PHASENET_WEIGHTS, COMPONENT_ORDER)
 
         async with self._client as client:
             stations, networks = set(), set()

@@ -171,17 +171,16 @@ def test_check_quiet():
         check_quiet(noise, 50.0, 1.0, window_start, detector)
 
 
-PHASENET_CACHED = any((seisbench.cache_model_root / "phasenet").glob("volpick.pt.*"))
-
-
-@pytest.mark.skipif(not PHASENET_CACHED, reason="Needs the cached PhaseNet weights")
-def test_earthquake_detector():
+@pytest.mark.parametrize("weights", ["volpick", "original"])
+def test_earthquake_detector(weights):
+    if not any((seisbench.cache_model_root / "phasenet").glob(f"{weights}.pt.*")):
+        pytest.skip(f"Needs the cached {weights} PhaseNet weights")
     # ObsPy's example: a local earthquake recorded at BW.RJOB, 100 Hz
     stream = obspy.read()
     quake = np.stack([stream.select(component=c)[0].data for c in "ZNE"]).astype(float)
     rng = np.random.default_rng(0)
     noise = rng.normal(scale=0.05 * quake.std(), size=(3, 9001))
-    detector = EarthquakeDetector("ZNE")
+    detector = EarthquakeDetector(weights, "ZNE")
 
     assert detector.max_probability(noise, 3000) < 0.1
     for scale in (1.0, 0.1):

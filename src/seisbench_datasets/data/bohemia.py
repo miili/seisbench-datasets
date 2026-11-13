@@ -39,7 +39,11 @@ from seisbench_datasets.data.multiclient import (
     get_cached_inventory,
     get_waveform_array,
 )
-from seisbench_datasets.data.noise import check_complete, is_away_from_events
+from seisbench_datasets.data.noise import (
+    EarthquakeDetector,
+    check_complete,
+    is_away_from_events,
+)
 from seisbench_datasets.data.resume import ResumableBenchmarkDataset
 
 REMOVE_CHANNELS = {
@@ -88,8 +92,13 @@ SAMPLING_RATE = 100.0
 # events, and within NOISE_SPAN of the event trace they are drawn for, so that the
 # station records with the same channels and the catalog covers the time.
 NOISE_SPAN = 30 * 86400.0
-# Candidate windows per noise trace, the first one without gaps is used
+# Candidate windows per noise trace, the first one with data, without gaps and
+# without an earthquake is used
 NOISE_CANDIDATES = 5
+# A candidate is skipped if PhaseNet detects a P or S phase above the probability.
+# A few earthquakes in the noise are fine, other transients must stay.
+NOISE_PHASENET_WEIGHTS = "original"
+NOISE_MAX_PHASE_PROBABILITY = 0.5
 NOISE_MAX_DRAWS = 1000
 # Rounds of noise downloads, each tops up the noise that failed in the round before
 NOISE_MAX_ROUNDS = 3
@@ -144,8 +153,10 @@ class BohemiaSaxony(ResumableBenchmarkDataset):
     the station of a random event trace of the split, in a quiet period, not selected
     by STA/LTA: at a random time within 30 days of the event, outside the swarm
     windows of the catalog (``bohemia_swarms.csv``), at least 120 s before and 180 s
-    after every catalog event. Of 5 candidate windows, the first without gaps is
-    used. The noise is planned after the event traces, from the event traces in the
+    after every catalog event. Of 5 candidate windows, the first with data,
+    without gaps and without an earthquake is used: PhaseNet (``original`` weights)
+    must not detect a P or S phase above a probability of 0.5, so that only
+    earthquakes are skipped, not other transients. The noise is planned after the event traces, from the event traces in the
     dataset, so a resumed or filled-up dataset reaches the same proportions.
 
     :param eida_token: EIDA token or path to a token file, for the restricted WB data
@@ -364,6 +375,10 @@ Seismic Networks:
             except (FDSNNoDataException, ValueError) as exc:
                 reasons.append(exc)
                 continue
+            probability = await asyncio.to_thread(self._detector.max_probability, data)
+            if probability > NOISE_MAX_PHASE_PROBABILITY:
+                reasons.append(f"Earthquake phase with probability {probability:.2f}.")
+                continue
             # The seed id has the full channel code, the job only the band and instrument
             trace_params = get_station_params(
                 WaveformStreamID(seed_string=seed_id), inventory, starttime
@@ -373,7 +388,8 @@ Seismic Networks:
             trace_params["trace_category"] = "noise"
             return trace_params, data
         raise ValueError(
-            f"No candidate window with data and without gaps, last: {reasons[-1]}"
+            f"No candidate window with data, without gaps and without an "
+            f"earthquake, last: {reasons[-1]}"
         )
 
     @classmethod
@@ -508,6 +524,9 @@ Seismic Networks:
         # Datasets compiled before the noise traces have no trace category
         writer.set_default("trace_category", "earthquake")
         anchors, noise = anchors_from_metadata(writer.resumed_metadata)
+        self._detector = None
+        if self._noise_fraction > 0:
+            self._detector = EarthquakeDetector(NOISE_PHASENET_WEIGHTS, COMPONENT_ORDER)
         tried = {
             name.removeprefix("noise_") for name in done if name.startswith("noise_")
         }
@@ -615,8 +634,8 @@ Seismic Networks:
                 )
             events = Counter(anchor.split for anchor in anchors)
             logger.info(
-                "Noise traces per split: %s. %d without a window with data and "
-                "without gaps.",
+                "Noise traces per split: %s. %d without a window with data, without "
+                "gaps and without an earthquake.",
                 ", ".join(
                     f"{split} {noise[split]} ({noise[split] / events[split]:.1%})"
                     for split in sorted(events)

@@ -94,11 +94,22 @@ def _anchor(i, split, network="WB"):
     )
 
 
-def _dataset(noise_fraction=0.3, noise_length=120.0):
+class _Detector:
+    """Reports the given probabilities, one per call, then 0."""
+
+    def __init__(self, *probabilities):
+        self.probabilities = list(probabilities)
+
+    def max_probability(self, data, start=0):
+        return self.probabilities.pop(0) if self.probabilities else 0.0
+
+
+def _dataset(noise_fraction=0.3, noise_length=120.0, detector=None):
     dataset = BohemiaSaxony.__new__(BohemiaSaxony)
     dataset._noise_fraction = noise_fraction
     dataset._noise_length = noise_length
     dataset._client = None
+    dataset._detector = detector or _Detector()
     return dataset
 
 
@@ -235,6 +246,17 @@ def test_noise_data_takes_first_complete_window(monkeypatch):
                 job._replace(starttimes=tuple(starts[:2])), _Inventory()
             )
         )
+
+    # PhaseNet detects an earthquake in the first complete candidate: the next one
+    requested.clear()
+    dataset = _dataset(detector=_Detector(0.9))
+    params, _ = asyncio.run(dataset.get_noise_data(job, _Inventory()))
+    assert requested == starts
+    assert params["trace_start_time"] == str(starts[3])
+
+    dataset = _dataset(detector=_Detector(0.9, 0.9))
+    with pytest.raises(ValueError, match="Earthquake phase with probability 0.90"):
+        asyncio.run(dataset.get_noise_data(job, _Inventory()))
 
 
 def _channel(code, location, start, end=None):
