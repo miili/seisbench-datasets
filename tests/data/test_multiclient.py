@@ -6,7 +6,7 @@ import pytest
 from obspy import Inventory, Stream, Trace, UTCDateTime
 from obspy.clients.fdsn.header import FDSNException
 
-from seisbench_models.data.multiclient import (
+from seisbench_datasets.data.multiclient import (
     FDSNSource,
     HinetRequest,
     HinetSource,

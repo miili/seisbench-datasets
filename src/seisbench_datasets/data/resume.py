@@ -26,6 +26,9 @@ import h5py
 import pandas as pd
 from seisbench import logger
 from seisbench.data.base import WaveformBenchmarkDataset, WaveformDataWriter
+from tqdm import tqdm
+
+from seisbench_datasets.cache import cache_root
 
 
 class ResumableWriter(WaveformDataWriter):
@@ -40,6 +43,8 @@ class ResumableWriter(WaveformDataWriter):
 
     def __init__(self, metadata_path, waveforms_path, resume: bool = False):
         super().__init__(metadata_path, waveforms_path)
+        # Progress is shown by download_parallel, hide SeisBench's tqdm bar
+        self._pbar = tqdm(disable=True)
         #: Metadata of the traces in the files when resuming, as text
         self.resumed_metadata = pd.DataFrame()
         #: Original names of the traces in the files when resuming
@@ -101,7 +106,7 @@ class ResumableWriter(WaveformDataWriter):
     def _write_metadata(self) -> None:
         metadata = pd.DataFrame(self._metadata)
         if self.metadata_dict is not None:
-            metadata.rename(columns=self.metadata_dict, inplace=True)
+            metadata = metadata.rename(columns=self.metadata_dict)
 
         tmp_path = self.metadata_path.with_name(self.metadata_path.name + ".tmp")
         metadata.to_csv(tmp_path, index=False)
@@ -251,7 +256,14 @@ class ResumableBenchmarkDataset(WaveformBenchmarkDataset):
     finished files. ``_download_dataset`` receives a :py:class:`ResumableWriter`
     and must skip the traces in ``writer.resumed_trace_names``. Only unchunked
     datasets are supported.
+
+    The datasets live in :py:func:`~seisbench_datasets.cache.cache_root`, not in
+    the SeisBench cache.
     """
+
+    @classmethod
+    def _path_internal(cls) -> Path:
+        return cache_root() / cls._name_internal().lower()
 
     def __init__(
         self,

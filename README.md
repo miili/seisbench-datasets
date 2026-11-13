@@ -1,11 +1,11 @@
-# seisbench-models
+# seisbench-datasets
 
 Compile [SeisBench](https://github.com/seisbench/seisbench) training datasets from
 earthquake catalogs and waveforms from FDSN web services and NIED Hi-net.
 
 The datasets are ordinary SeisBench `WaveformBenchmarkDataset`s. They are compiled
-into the SeisBench cache on first use, and an interrupted download resumes where it
-stopped.
+on first use into `~/.cache/seisbench-datasets/` (the user cache directory, or
+`$SEISBENCH_DATASETS_CACHE`), and an interrupted download resumes where it stopped.
 
 | Dataset | Content | Sources |
 | --- | --- | --- |
@@ -22,23 +22,28 @@ uv sync --extra hinet      # Japan region of DeepLowFrequency
 The Hi-net download also needs a Hi-net account and the Hi-net win32tools
 (`catwin32` and `win2sac_32` on the `PATH`).
 
+## Compile
+
+```sh
+seisbench-datasets bohemia --eida-token ~/.eidatoken
+seisbench-datasets dlf --catalog-dir quakeml/ [--hinet-user USER]
+```
+
+A live table shows the downloads per data center (done, failed, time left), the
+logs run above it. Stop with Ctrl-C and run the same command again to resume.
+`--force` moves an existing dataset to a backup folder and compiles it anew.
+
 ## Use
 
 ```python
-from seisbench_models.data import BohemiaSaxony, DeepLowFrequency
+from seisbench_datasets.data import BohemiaSaxony, DeepLowFrequency
 
-data = BohemiaSaxony(eida_token="~/.eidatoken", component_order="ZNE")
+data = BohemiaSaxony(component_order="ZNE")
 dlf = DeepLowFrequency(catalog_dir="quakeml/")  # one QuakeML file per region
 ```
 
-Or compile from the command line:
-
-```sh
-uv run python -m seisbench_models.data.bohemia --eida-token ~/.eidatoken
-uv run python -m seisbench_models.data.dlf --catalog-dir quakeml/ [--hinet-user USER]
-```
-
-`--force` moves an existing dataset to a backup folder and compiles it anew.
+Compiling from Python works the same. Call `seisbench_datasets.progress.setup_logging()`
+first to get the live table there, too.
 
 ### Notes
 

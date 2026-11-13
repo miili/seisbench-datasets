@@ -1,3 +1,3 @@
 from importlib.metadata import version as _version
 
-__version__ = _version("seisbench-models")
+__version__ = _version("seisbench-datasets")

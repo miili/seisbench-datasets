@@ -26,7 +26,7 @@ from seisbench.data.base import (
 )
 from seisbench.util import download_http
 
-from seisbench_models.data.multiclient import (
+from seisbench_datasets.data.multiclient import (
     FDSNSource,
     MultiClient,
     WaveformRequest,
@@ -34,10 +34,7 @@ from seisbench_models.data.multiclient import (
     get_cached_inventory,
     get_waveform_array,
 )
-from seisbench_models.data.resume import (
-    ResumableBenchmarkDataset,
-    move_to_backup,
-)
+from seisbench_datasets.data.resume import ResumableBenchmarkDataset
 
 REMOVE_CHANNELS = {
     "HHT",  # Stray channel or typo
@@ -310,7 +307,7 @@ Seismic Networks:
     ):
         """
         Downloads the waveforms of all stations in the catalog, see
-        :py:func:`~seisbench_models.data.multiclient.download_parallel`.
+        :py:func:`~seisbench_datasets.data.multiclient.download_parallel`.
 
         When resuming, the traces already written are skipped. Source ids and splits
         are deterministic, so they match the earlier run.
@@ -655,39 +652,3 @@ def get_split(
         return "dev"
     else:
         return "test"
-
-
-if __name__ == "__main__":
-    from argparse import ArgumentParser
-
-    parser = ArgumentParser()
-    parser.add_argument(
-        "--eida-token",
-        type=str,
-        default=None,
-        help="Path to EIDA token file.",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Compile a new dataset. An existing dataset is moved to a backup "
-        "folder next to it first.",
-    )
-    args = parser.parse_args()
-    logger.setLevel("INFO")
-    if args.eida_token is not None:
-        path = Path(args.eida_token).expanduser().resolve()
-        if not path.is_file():
-            parser.error(f"EIDA token file {path} does not exist.")
-        args.eida_token = str(path)
-
-    if args.force:
-        try:
-            backup_path = move_to_backup(BohemiaSaxony._path_internal())
-        except RuntimeError as exc:
-            parser.error(str(exc))
-        if backup_path is not None:
-            logger.info("Moved the existing dataset to %s", backup_path)
-
-    ds = BohemiaSaxony(eida_token=args.eida_token, component_order="ZNE")
-    print(ds)

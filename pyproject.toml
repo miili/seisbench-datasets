@@ -1,5 +1,5 @@
 [project]
-name = "seisbench-models"
+name = "seisbench-datasets"
 version = "0.1.0"
 description = "Compile SeisBench training datasets from earthquake catalogs and FDSN / Hi-net waveforms"
 readme = "README.md"
@@ -14,7 +14,14 @@ dependencies = [
     "obspy",
     "pandas",
     "scipy",
+    "platformdirs>=4.12.4",
+    "rich>=15.0.0",
+    "typer>=0.29.1",
+    "tqdm>=4.70.1",
 ]
+
+[project.scripts]
+seisbench-datasets = "seisbench_datasets.cli:app"
 
 [project.optional-dependencies]
 hinet = ["HinetPy>=0.13"]

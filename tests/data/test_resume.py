@@ -3,10 +3,9 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
-import seisbench
 import seisbench.data as sbd
 
-from seisbench_models.data.resume import (
+from seisbench_datasets.data.resume import (
     ResumableBenchmarkDataset,
     ResumableWriter,
     compile_if_uncached,
@@ -172,9 +171,9 @@ class _ToyDataset(ResumableBenchmarkDataset):
             writer.checkpoint()
 
 
-def test_dataset_resume(tmp_path, monkeypatch):
-    monkeypatch.setattr(seisbench, "cache_data_root", tmp_path)
+def test_dataset_resume(cache_root):
     path = _ToyDataset._path_internal()
+    assert path == cache_root / "_toydataset"
 
     _ToyDataset.fail_at = "c"
     with pytest.raises(RuntimeError):

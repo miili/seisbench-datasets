@@ -26,7 +26,6 @@ from typing import (
 
 import numpy as np
 import obspy
-import seisbench
 from obspy import Inventory, Stream, UTCDateTime, read_inventory
 from obspy.clients.fdsn.header import FDSNException, FDSNNoDataException
 from obspy.core.inventory import Channel, Network, Station
@@ -38,6 +37,9 @@ from seisbench.util.trace_ops import (
     stream_to_array,
     trace_has_spikes,
 )
+
+from seisbench_datasets.cache import cache_root
+from seisbench_datasets.progress import DownloadProgress
 
 if TYPE_CHECKING:
     import aiohttp
@@ -60,7 +62,7 @@ def _import_hinetpy():
     except ImportError as exc:
         raise ImportError(
             "Downloading Hi-net data requires HinetPy and the Hi-net win32tools. "
-            "Install HinetPy with `pip install seisbench-models[hinet]`."
+            "Install HinetPy with `pip install seisbench-datasets[hinet]`."
         ) from exc
     return HinetPy
 
@@ -505,8 +507,8 @@ class HinetSource(Source):
     :param user: Hi-net user name
     :param password: Hi-net password
     :param network: Network code of the stations
-    :param cache_dir: Folder of the cached downloads, by default ``hinet`` in the
-        SeisBench cache
+    :param cache_dir: Folder of the cached downloads, by default ``hinet`` in
+        :py:func:`~seisbench_datasets.cache.cache_root`
     :param block_length: Length of the cached blocks in minutes
     :param max_span: Maximum length of a download in minutes, when it is extended by
         adjacent planned blocks
@@ -528,7 +530,7 @@ class HinetSource(Source):
         super().__init__(connections=1, networks=[network])
         self.network = network
         self.cache_dir = (
-            Path(cache_dir) if cache_dir is not None else seisbench.cache_root / "hinet"
+            Path(cache_dir) if cache_dir is not None else cache_root() / "hinet"
         )
         self.block_length = block_length
         self.max_span = max_span
@@ -846,6 +848,7 @@ async def download_parallel(
     write: Callable[[Job, Result | None, Exception | None], None],
     checkpoint: Callable[[], None] | None = None,
     checkpoint_interval: float = 600.0,
+    title: str = "Total",
 ) -> None:
     """
     Runs ``download`` for all jobs. Each source has its own queue, worked on by as
@@ -856,6 +859,7 @@ async def download_parallel(
     :param jobs: Pairs of the source serving a job and the job
     :param checkpoint: Called every ``checkpoint_interval`` seconds, between two calls
         of ``write``, e.g., :py:meth:`~seisbench.data.WaveformDataWriter.checkpoint`
+    :param title: Label of the total row in the progress table
     """
     queues: dict[Source, asyncio.Queue] = defaultdict(asyncio.Queue)
     for source, job in jobs:
@@ -868,31 +872,36 @@ async def download_parallel(
     )
     results = asyncio.Queue(maxsize=64)
 
-    async def worker(queue: asyncio.Queue):
+    progress = DownloadProgress(
+        {source: queue.qsize() for source, queue in queues.items()}, title
+    )
+
+    async def worker(source: Source, queue: asyncio.Queue):
         while True:
             try:
                 job = queue.get_nowait()
             except asyncio.QueueEmpty:
                 return
             try:
-                await results.put((job, await download(job), None))
+                await results.put((source, job, await download(job), None))
             except Exception as exc:
-                await results.put((job, None, exc))
+                await results.put((source, job, None, exc))
 
     async def writer():
         n_written = 0
         last_checkpoint = time.monotonic()
         for i_job in range(n_jobs):
-            job, result, exc = await results.get()
+            source, job, result, exc = await results.get()
             await asyncio.to_thread(write, job, result, exc)
             n_written += exc is None
+            progress.advance(source, failed=exc is not None)
             if (
                 checkpoint is not None
                 and time.monotonic() - last_checkpoint >= checkpoint_interval
             ):
                 await asyncio.to_thread(checkpoint)
                 last_checkpoint = time.monotonic()
-            if (i_job + 1) % 1000 == 0 or i_job + 1 == n_jobs:
+            if not progress.live and ((i_job + 1) % 1000 == 0 or i_job + 1 == n_jobs):
                 logger.info(
                     "Processed %d/%d waveforms, %d downloaded.",
                     i_job + 1,
@@ -900,14 +909,15 @@ async def download_parallel(
                     n_written,
                 )
 
-    await asyncio.gather(
-        writer(),
-        *(
-            worker(queue)
-            for source, queue in queues.items()
-            for _ in range(source.connections)
-        ),
-    )
+    with progress:
+        await asyncio.gather(
+            writer(),
+            *(
+                worker(source, queue)
+                for source, queue in queues.items()
+                for _ in range(source.connections)
+            ),
+        )
 
 
 def select_location(stream: Stream, location: str) -> Stream:

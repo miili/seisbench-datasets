@@ -25,7 +25,7 @@ from seisbench.data.base import (
 )
 from seisbench.util.trace_ops import trace_has_spikes
 
-from seisbench_models.data.multiclient import (
+from seisbench_datasets.data.multiclient import (
     FDSNSource,
     HinetSource,
     MultiClient,
@@ -35,10 +35,7 @@ from seisbench_models.data.multiclient import (
     get_cached_inventory,
     get_waveform_array,
 )
-from seisbench_models.data.resume import (
-    ResumableBenchmarkDataset,
-    move_to_backup,
-)
+from seisbench_datasets.data.resume import ResumableBenchmarkDataset
 
 # One QuakeML file per region, <region>.xml. Japan needs a Hi-net account.
 REGIONS = (
@@ -313,9 +310,9 @@ class DeepLowFrequency(ResumableBenchmarkDataset):
 
     The dataset is compiled from FDSN web services (EarthScope, NCEDC, BGR, GFZ) and
     NIED Hi-net. Japan is only included with Hi-net credentials, which also needs
-    HinetPy and the Hi-net win32tools (``pip install seisbench-models[hinet]``). All traces
+    HinetPy and the Hi-net win32tools (``pip install seisbench-datasets[hinet]``). All traces
     are counts. Hi-net downloads are cached in blocks of 5 minutes in ``hinet`` in
-    the SeisBench cache, so compiling the dataset again with other windows reuses
+    the seisbench-datasets cache, so compiling the dataset again with other windows reuses
     them. The
     catalogs are read from one QuakeML file per region in ``catalog_dir``. The event
     class is an event comment (``event_class: DLP``). The events of each catalog are
@@ -816,7 +813,9 @@ BQ, HS, NH, 1P, 2D, LU), among others.
                     noise_candidates[job.region].append(job)
 
             self._plan(client, jobs)
-            await download_parallel(jobs, download, write, checkpoint=writer.checkpoint)
+            await download_parallel(
+                jobs, download, write, checkpoint=writer.checkpoint, title="Events"
+            )
 
             for i_round in range(NOISE_MAX_ROUNDS):
                 jobs = self._noise_top_up(client, outcomes, noise_candidates, rng)
@@ -831,7 +830,11 @@ BQ, HS, NH, 1P, 2D, LU), among others.
                 with_noise.update(job.trace_name for _, job in jobs)
                 self._plan(client, jobs)
                 await download_parallel(
-                    jobs, download, write, checkpoint=writer.checkpoint
+                    jobs,
+                    download,
+                    write,
+                    checkpoint=writer.checkpoint,
+                    title=f"Noise round {i_round + 1}",
                 )
 
         stats = DownloadStats.from_outcomes(
@@ -1051,70 +1054,6 @@ def is_away_from_events(
         i == len(origin_times)
         or origin_times[i] >= endtime.timestamp + NOISE_GAP_BEFORE_EVENT
     )
-
-
-if __name__ == "__main__":
-    import os
-    from argparse import ArgumentParser
-    from getpass import getpass
-
-    parser = ArgumentParser()
-    parser.add_argument(
-        "--catalog-dir",
-        type=Path,
-        default=None,
-        help="Folder with the QuakeML catalogs, <region>.xml.",
-    )
-    parser.add_argument(
-        "--eida-token",
-        type=str,
-        default=None,
-        help="Path to EIDA token file.",
-    )
-    parser.add_argument(
-        "--hinet-user",
-        type=str,
-        default=None,
-        help="Hi-net user name, for the Japan region. The password is read from the "
-        "HINET_PASSWORD environment variable, or asked for.",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Compile a new dataset. An existing dataset is moved to a backup "
-        "folder next to it first.",
-    )
-    args = parser.parse_args()
-    logger.setLevel("INFO")
-    if args.eida_token is not None:
-        path = Path(args.eida_token).expanduser().resolve()
-        if not path.is_file():
-            parser.error(f"EIDA token file {path} does not exist.")
-        args.eida_token = str(path)
-    if args.catalog_dir is not None:
-        args.catalog_dir = args.catalog_dir.expanduser().resolve()
-    hinet_password = None
-    if args.hinet_user is not None:
-        hinet_password = os.environ.get("HINET_PASSWORD") or getpass(
-            f"Hi-net password for {args.hinet_user}: "
-        )
-
-    if args.force:
-        try:
-            backup_path = move_to_backup(DeepLowFrequency._path_internal())
-        except RuntimeError as exc:
-            parser.error(str(exc))
-        if backup_path is not None:
-            logger.info("Moved the existing dataset to %s", backup_path)
-
-    ds = DeepLowFrequency(
-        catalog_dir=args.catalog_dir,
-        eida_token=args.eida_token,
-        hinet_user=args.hinet_user,
-        hinet_password=hinet_password,
-        component_order="ZNE",
-    )
-    print(ds)
 
 
 __all__ = ["DeepLowFrequency"]

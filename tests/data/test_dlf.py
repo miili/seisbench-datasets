@@ -14,7 +14,7 @@ from obspy.core.event import (
     WaveformStreamID,
 )
 
-from seisbench_models.data.dlf import (
+from seisbench_datasets.data.dlf import (
     NOISE_MAX_REJECTED,
     DeepLowFrequency,
     Download,
@@ -28,7 +28,7 @@ from seisbench_models.data.dlf import (
     is_away_from_events,
     split_events,
 )
-from seisbench_models.data.multiclient import FDSNSource
+from seisbench_datasets.data.multiclient import FDSNSource
 
 
 def test_is_quiet():
@@ -272,9 +272,11 @@ def test_pick_outside_data(monkeypatch):
         return "HV.BYL..HHZ", params, np.zeros((3, 6001))
 
     monkeypatch.setattr(
-        "seisbench_models.data.dlf.get_waveform_array", get_waveform_array
+        "seisbench_datasets.data.dlf.get_waveform_array", get_waveform_array
     )
-    monkeypatch.setattr("seisbench_models.data.dlf.get_trace_params", lambda *args: {})
+    monkeypatch.setattr(
+        "seisbench_datasets.data.dlf.get_trace_params", lambda *args: {}
+    )
     dataset = DeepLowFrequency.__new__(DeepLowFrequency)
     dataset._client = None
 
