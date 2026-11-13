@@ -18,13 +18,13 @@ from obspy.core.event import Catalog, Event, Pick, WaveformStreamID
 from obspy.geodetics import gps2dist_azimuth
 from obspy.signal.filter import bandpass
 from obspy.signal.trigger import classic_sta_lta
-
 from seisbench import logger
 from seisbench.data.base import (
     EventParameters,
     TraceParameters,
-    WaveformBenchmarkDataset,
 )
+from seisbench.util.trace_ops import trace_has_spikes
+
 from seisbench_models.data.multiclient import (
     FDSNSource,
     HinetSource,
@@ -35,8 +35,10 @@ from seisbench_models.data.multiclient import (
     get_cached_inventory,
     get_waveform_array,
 )
-from seisbench_models.data.resume import move_to_backup
-from seisbench.util.trace_ops import trace_has_spikes
+from seisbench_models.data.resume import (
+    ResumableBenchmarkDataset,
+    move_to_backup,
+)
 
 # One QuakeML file per region, <region>.xml. Japan needs a Hi-net account.
 REGIONS = (
@@ -303,7 +305,7 @@ class DownloadStats(NamedTuple):
             writer.writerows(self.failures)
 
 
-class DeepLowFrequency(WaveformBenchmarkDataset):
+class DeepLowFrequency(ResumableBenchmarkDataset):
     """
     Deep low-frequency (DLF) earthquakes, also called deep long-period (DLP) events,
     below volcanoes in Alaska, Hawaii, Japan, Northern California, the Cascades and
@@ -340,10 +342,8 @@ class DeepLowFrequency(WaveformBenchmarkDataset):
 
     .. note ::
 
-        The dataset is compiled from FDSN web services on first use, which requires
-        ``aiohttp``. Install it with ``pip install seisbench-models[download]``. An
-        interrupted download resumes where it stopped when the dataset is created
-        again.
+        The dataset is compiled from FDSN web services on first use. An interrupted
+        download resumes where it stopped when the dataset is created again.
 
     :param catalog_dir: Folder with the QuakeML catalogs, ``<region>.xml``. Defaults
         to ``quakeml`` in the dataset folder.
@@ -358,7 +358,6 @@ class DeepLowFrequency(WaveformBenchmarkDataset):
     """
 
     _client: MultiClient
-    supports_resume = True
 
     def __init__(
         self,
@@ -528,7 +527,7 @@ BQ, HS, NH, 1P, 2D, LU), among others.
         )
 
         jobs = []
-        for event, split in zip(events, splits):
+        for event, split in zip(events, splits, strict=True):
             event_params = get_event_params(event, region)
             event_params["split"] = split
             source_id = event_params["source_id"]

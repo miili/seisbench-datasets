@@ -1,0 +1,41 @@
+[project]
+name = "seisbench-models"
+version = "0.1.0"
+description = "Compile SeisBench training datasets from earthquake catalogs and FDSN / Hi-net waveforms"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "seisbench>=0.12.7",
+    "aiohttp>=3.12",
+    "h5py",
+    "numpy",
+    "obspy",
+    "pandas",
+    "scipy",
+]
+
+[project.optional-dependencies]
+hinet = ["HinetPy>=0.13"]
+
+[dependency-groups]
+dev = [
+    "prek",
+    "pytest<9.2",
+    "pytest-asyncio>=0.26.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.13"]
+build-backend = "uv_build"
+
+[tool.ruff.lint]
+# Explicit, so that new ruff defaults don't change the checks
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+# Empty methods in ABCs are optional hooks, e.g., Source.authenticate
+ignore = ["B027"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]

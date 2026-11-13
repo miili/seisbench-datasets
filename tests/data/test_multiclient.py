@@ -99,13 +99,13 @@ def test_hinet_plan_combines_requests(tmp_path):
     assert first.starttime == UTCDateTime(2010, 5, 1, 3, 0).timestamp
     assert first.endtime == UTCDateTime(2010, 5, 1, 3, 10).timestamp
     assert second.stations == {"RKBH"}
-    for stream, request in zip(streams, requests):
+    for stream, request in zip(streams, requests, strict=True):
         _check(stream, request)
 
     # Cached: another source with the same cache downloads nothing
     fetched.clear()
     for stream, request in zip(
-        _get_all(_source(fetched, tmp_path), requests), requests
+        _get_all(_source(fetched, tmp_path), requests), requests, strict=True
     ):
         _check(stream, request)
     assert fetched == []

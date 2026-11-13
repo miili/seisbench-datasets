@@ -3,9 +3,16 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
-
+import seisbench
 import seisbench.data as sbd
-from seisbench.util.file import _try_lock, callback_if_uncached, move_to_backup
+
+from seisbench_models.data.resume import (
+    ResumableBenchmarkDataset,
+    ResumableWriter,
+    compile_if_uncached,
+    move_to_backup,
+    try_lock,
+)
 
 
 def _add(writer, names):
@@ -17,7 +24,7 @@ def _add(writer, names):
 
 
 def _writer(path, resume=False):
-    writer = sbd.WaveformDataWriter(
+    writer = ResumableWriter(
         path / "metadata.csv", path / "waveforms.hdf5", resume=resume
     )
     writer.data_format = {"dimension_order": "CW", "component_order": "ZNE"}
@@ -61,10 +68,9 @@ def test_writer_resume(tmp_path, bucket_size):
 
 def test_writer_resume_after_error(tmp_path):
     # An exception finalizes the files, which can then be resumed, too
-    with pytest.raises(RuntimeError):
-        with _writer(tmp_path) as writer:
-            _add(writer, ["a", "b"])
-            raise RuntimeError("download failed")
+    with pytest.raises(RuntimeError), _writer(tmp_path) as writer:
+        _add(writer, ["a", "b"])
+        raise RuntimeError("download failed")
 
     with _writer(tmp_path, resume=True) as writer:
         assert writer.resumed_trace_names == {"a", "b"}
@@ -73,32 +79,59 @@ def test_writer_resume_after_error(tmp_path):
     assert len(sbd.WaveformDataset(tmp_path)) == 3
 
 
-def test_callback_resume(tmp_path):
+def test_compile_resume(tmp_path):
     file = tmp_path / "metadata.csv"
     partial = tmp_path / "metadata.csv.partial"
     partial.write_text("progress")
     calls = []
 
-    def callback(path):
+    def callback(paths):
+        (path,) = paths
         calls.append(path.read_text())
         path.write_text(path.read_text() + " done")
 
-    # Without resume, partial files mean another download is running or failed
-    with pytest.raises(ValueError, match="partial"):
-        callback_if_uncached(file, callback)
-
     if sys.platform != "win32":  # Without fcntl, nothing is locked
         # Another process holds the lock: still running
-        lock = _try_lock(file)
-        with pytest.raises(ValueError, match="partial"):
-            callback_if_uncached(file, callback, resume=True)
+        lock = try_lock(file)
+        with pytest.raises(ValueError, match="Another process"):
+            compile_if_uncached([file], callback)
         lock.close()
 
     # The lock is free: the earlier download stopped, so resume from its files
-    callback_if_uncached(file, callback, resume=True)
+    compile_if_uncached([file], callback)
     assert calls == ["progress"]
     assert file.read_text() == "progress done"
     assert not (tmp_path / "metadata.csv.lock").exists()
+
+    # Finished: the callback doesn't run again
+    compile_if_uncached([file], callback)
+    assert calls == ["progress"]
+
+
+def test_compile_force(tmp_path):
+    file = tmp_path / "metadata.csv"
+    (tmp_path / "metadata.csv.partial").write_text("progress")
+
+    def callback(paths):
+        (path,) = paths
+        assert path.read_text() == ""
+        path.write_text("fresh")
+
+    compile_if_uncached([file], callback, force=True)
+    assert file.read_text() == "fresh"
+
+
+def test_compile_error_keeps_partial(tmp_path):
+    file = tmp_path / "metadata.csv"
+
+    def callback(paths):
+        paths[0].write_text("progress")
+        raise RuntimeError("download failed")
+
+    with pytest.raises(RuntimeError):
+        compile_if_uncached([file], callback)
+    assert not file.exists()
+    assert (tmp_path / "metadata.csv.partial").read_text() == "progress"
 
 
 def test_move_to_backup(tmp_path):
@@ -109,7 +142,7 @@ def test_move_to_backup(tmp_path):
     (dataset / "metadata.csv.partial").write_text("progress")
     if sys.platform != "win32":  # Without fcntl, nothing is locked
         # A running download holds the lock: its folder must not be moved
-        lock = _try_lock(dataset / "metadata.csv")
+        lock = try_lock(dataset / "metadata.csv")
         with pytest.raises(RuntimeError, match="running"):
             move_to_backup(dataset)
         lock.close()
@@ -118,3 +151,39 @@ def test_move_to_backup(tmp_path):
     backup = move_to_backup(dataset)
     assert not dataset.exists()
     assert (backup / "metadata.csv.partial").read_text() == "progress"
+
+
+class _ToyDataset(ResumableBenchmarkDataset):
+    fail_at = None
+    added = []
+
+    def __init__(self, **kwargs):
+        super().__init__(repository_lookup=False, **kwargs)
+
+    def _download_dataset(self, writer, **kwargs):
+        writer.data_format = {"dimension_order": "CW", "component_order": "ZNE"}
+        for name in "abcd":
+            if name in writer.resumed_trace_names:
+                continue
+            if name == self.fail_at:
+                raise RuntimeError("download failed")
+            writer.add_trace({"trace_name": name, "split": "train"}, np.zeros((3, 100)))
+            self.added.append(name)
+            writer.checkpoint()
+
+
+def test_dataset_resume(tmp_path, monkeypatch):
+    monkeypatch.setattr(seisbench, "cache_data_root", tmp_path)
+    path = _ToyDataset._path_internal()
+
+    _ToyDataset.fail_at = "c"
+    with pytest.raises(RuntimeError):
+        _ToyDataset()
+    assert not (path / "metadata.csv").exists()
+    assert (path / "metadata.csv.partial").exists()
+
+    _ToyDataset.fail_at = None
+    dataset = _ToyDataset()
+    assert _ToyDataset.added == ["a", "b", "c", "d"]
+    assert len(dataset) == 4
+    assert not (path / "metadata.csv.lock").exists()

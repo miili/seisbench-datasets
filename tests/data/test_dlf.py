@@ -1,27 +1,26 @@
 import asyncio
 
+import numpy as np
+import pytest
 from obspy import UTCDateTime
 from obspy.core.event import (
-    Pick,
-    WaveformStreamID,
     Comment,
     Event,
     EventDescription,
     Magnitude,
     Origin,
+    Pick,
     ResourceIdentifier,
+    WaveformStreamID,
 )
-
-import numpy as np
-import pytest
 
 from seisbench_models.data.dlf import (
     NOISE_MAX_REJECTED,
     DeepLowFrequency,
     Download,
+    DownloadStats,
     Job,
     NoNoiseWindowError,
-    DownloadStats,
     NotQuietError,
     Outcome,
     check_quiet,
@@ -272,7 +271,9 @@ def test_pick_outside_data(monkeypatch):
         }
         return "HV.BYL..HHZ", params, np.zeros((3, 6001))
 
-    monkeypatch.setattr("seisbench_models.data.dlf.get_waveform_array", get_waveform_array)
+    monkeypatch.setattr(
+        "seisbench_models.data.dlf.get_waveform_array", get_waveform_array
+    )
     monkeypatch.setattr("seisbench_models.data.dlf.get_trace_params", lambda *args: {})
     dataset = DeepLowFrequency.__new__(DeepLowFrequency)
     dataset._client = None

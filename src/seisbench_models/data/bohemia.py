@@ -11,6 +11,7 @@ from urllib.parse import urljoin
 from zipfile import ZipFile
 
 import numpy as np
+import seisbench
 from obspy import Inventory, UTCDateTime
 from obspy.clients.fdsn.header import URL_MAPPINGS
 from obspy.core.event.base import QuantityError, WaveformStreamID
@@ -18,14 +19,13 @@ from obspy.core.event.catalog import Catalog, Event
 from obspy.core.event.origin import Pick
 from obspy.geodetics import degrees2kilometers, gps2dist_azimuth
 from obspy.io.nordic.core import read_nordic
-
-import seisbench
 from seisbench import logger
 from seisbench.data.base import (
     EventParameters,
     TraceParameters,
-    WaveformBenchmarkDataset,
 )
+from seisbench.util import download_http
+
 from seisbench_models.data.multiclient import (
     FDSNSource,
     MultiClient,
@@ -34,8 +34,10 @@ from seisbench_models.data.multiclient import (
     get_cached_inventory,
     get_waveform_array,
 )
-from seisbench.util import download_http
-from seisbench_models.data.resume import move_to_backup
+from seisbench_models.data.resume import (
+    ResumableBenchmarkDataset,
+    move_to_backup,
+)
 
 REMOVE_CHANNELS = {
     "HHT",  # Stray channel or typo
@@ -77,7 +79,7 @@ PICK_WHITELIST = {
 WEBNET_SWITCH_SH_CH_CHANNEL = datetime(2015, 5, 26)
 
 
-class BohemiaSaxony(WaveformBenchmarkDataset):
+class BohemiaSaxony(ResumableBenchmarkDataset):
     """
     Regional benchmark dataset of waveform data and metadata
     for the North-West Bohemia and Saxony region in Germany/Czech Republic.
@@ -90,17 +92,14 @@ class BohemiaSaxony(WaveformBenchmarkDataset):
 
     .. note ::
 
-        The dataset is compiled from FDSN web services on first use, which requires
-        ``aiohttp``. Install it with ``pip install seisbench-models[download]``. An
-        interrupted download resumes where it stopped when the dataset is created
-        again.
+        The dataset is compiled from FDSN web services on first use. An interrupted
+        download resumes where it stopped when the dataset is created again.
 
     :param eida_token: EIDA token or path to a token file, for the restricted WB data
     :param connections: Number of parallel connections per FDSN data center
     """
 
     _client: MultiClient
-    supports_resume = True
 
     def __init__(
         self,
@@ -156,7 +155,7 @@ Seismic Networks:
             ]
         )
 
-    def _download_catalog_colm(self, path: Path = Path.cwd()) -> Path:
+    def _download_catalog_colm(self, path: Path) -> Path:
         files = list((self.path / "final2").glob("cll_*.txt"))
         if files:
             logger.debug("Catalog files already exist, skipping download.")
@@ -553,7 +552,7 @@ def fixup_catalog(catalog: Catalog, inventory: Inventory) -> Catalog:
             waveform_id = pick.waveform_id
 
             try:
-                waveform_id.channel_code = "%sH%s" % tuple(waveform_id.channel_code)
+                waveform_id.channel_code = "%sH%s" % tuple(waveform_id.channel_code)  # noqa: UP031, raises TypeError unless 2 characters
             except TypeError:
                 # This happens if the channel code is already in the correct format.
                 event.picks.remove(pick)
@@ -575,9 +574,9 @@ def fixup_catalog(catalog: Catalog, inventory: Inventory) -> Catalog:
 
             if waveform_id.network_code == "WB":
                 if origin_time.datetime < WEBNET_SWITCH_SH_CH_CHANNEL:
-                    waveform_id.channel_code = "SH%s" % waveform_id.channel_code[-1]
+                    waveform_id.channel_code = f"SH{waveform_id.channel_code[-1]}"
                 else:
-                    waveform_id.channel_code = "CH%s" % waveform_id.channel_code[-1]
+                    waveform_id.channel_code = f"CH{waveform_id.channel_code[-1]}"
 
             if waveform_id.channel_code in REMOVE_CHANNELS:
                 event.picks.remove(pick)

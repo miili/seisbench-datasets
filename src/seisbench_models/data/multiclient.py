@@ -12,15 +12,13 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime
 from fnmatch import fnmatch
 from fractions import Fraction
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Awaitable,
-    Callable,
-    Iterable,
     Literal,
     NamedTuple,
     TypeVar,
@@ -28,12 +26,11 @@ from typing import (
 
 import numpy as np
 import obspy
+import seisbench
 from obspy import Inventory, Stream, UTCDateTime, read_inventory
 from obspy.clients.fdsn.header import FDSNException, FDSNNoDataException
 from obspy.core.inventory import Channel, Network, Station
 from scipy import signal
-
-import seisbench
 from seisbench import logger
 from seisbench.data.base import TraceParameters
 from seisbench.util.trace_ops import (
@@ -52,7 +49,7 @@ def _import_aiohttp():
     except ImportError as exc:
         raise ImportError(
             "Compiling datasets from FDSN web services requires "
-            "aiohttp. Install it with `pip install seisbench-models[download]`."
+            "aiohttp. Install it with `pip install aiohttp`."
         ) from exc
     return aiohttp
 
@@ -460,7 +457,7 @@ class MultiClient:
             )
         )
         inventory = Inventory()
-        for source, inv in zip(self.sources, inventories):
+        for source, inv in zip(self.sources, inventories, strict=True):
             for network in inv:
                 self._network.setdefault(network.code, source)
             inventory.extend(inv)
