@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
+import csv
 import warnings
 from collections import Counter, defaultdict
 from datetime import datetime
+from importlib import resources
 from itertools import groupby
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 from urllib.parse import urljoin
 from zipfile import ZipFile
 
 import numpy as np
 import seisbench
 from obspy import Inventory, UTCDateTime
-from obspy.clients.fdsn.header import URL_MAPPINGS
+from obspy.clients.fdsn.header import URL_MAPPINGS, FDSNNoDataException
 from obspy.core.event.base import QuantityError, WaveformStreamID
 from obspy.core.event.catalog import Catalog, Event
 from obspy.core.event.origin import Pick
@@ -29,11 +32,13 @@ from seisbench.util import download_http
 from seisbench_datasets.data.multiclient import (
     FDSNSource,
     MultiClient,
+    Source,
     WaveformRequest,
     download_parallel,
     get_cached_inventory,
     get_waveform_array,
 )
+from seisbench_datasets.data.noise import check_complete, is_away_from_events
 from seisbench_datasets.data.resume import ResumableBenchmarkDataset
 
 REMOVE_CHANNELS = {
@@ -75,6 +80,28 @@ PICK_WHITELIST = {
 
 WEBNET_SWITCH_SH_CH_CHANNEL = datetime(2015, 5, 26)
 
+SAMPLING_RATE = 100.0
+
+# Noise windows are drawn at random times in quiet periods: outside the swarm
+# windows in bohemia_swarms.csv (see scripts/bohemia_swarms.py), away from catalog
+# events, and within NOISE_SPAN of the event trace they are drawn for, so that the
+# station records with the same channels and the catalog covers the time.
+NOISE_SPAN = 30 * 86400.0
+# Candidate windows per noise trace, the first one without gaps is used
+NOISE_CANDIDATES = 5
+NOISE_MAX_DRAWS = 1000
+
+
+class NoiseJob(NamedTuple):
+    """
+    A noise trace at the station of an event trace, with candidate start times.
+    """
+
+    trace_name: str
+    waveform_id: WaveformStreamID
+    split: str
+    starttimes: tuple[UTCDateTime, ...]
+
 
 class BohemiaSaxony(ResumableBenchmarkDataset):
     """
@@ -92,7 +119,17 @@ class BohemiaSaxony(ResumableBenchmarkDataset):
         The dataset is compiled from FDSN web services on first use. An interrupted
         download resumes where it stopped when the dataset is created again.
 
+    Noise traces (``trace_category = "noise"``) are added for a fraction of the
+    event traces (``trace_category = "earthquake"``), at the same station and with
+    the split of the event trace. They are taken from quiet periods, not selected by
+    STA/LTA: at a random time within 30 days of the event, outside the swarm windows
+    of the catalog (``bohemia_swarms.csv``), at least 120 s before and 180 s after
+    every catalog event. Of 5 candidate windows, the first without gaps is used.
+
     :param eida_token: EIDA token or path to a token file, for the restricted WB data
+    :param noise_fraction: Fraction of the event traces that get a noise trace. 0
+        disables noise traces.
+    :param noise_length: Length of the noise traces in seconds
     :param connections: Number of parallel connections per FDSN data center
     """
 
@@ -101,6 +138,8 @@ class BohemiaSaxony(ResumableBenchmarkDataset):
     def __init__(
         self,
         eida_token: str | None = None,
+        noise_fraction: float = 0.3,
+        noise_length: float = 120.0,
         connections: int = 4,
         compile_from_source: bool = True,
         **kwargs,
@@ -127,6 +166,8 @@ Seismic Networks:
 * Czech Regional Seismic Network, https://doi.org/10.7914/SN/CZ
 """
         self._eida_token = eida_token
+        self._noise_fraction = noise_fraction
+        self._noise_length = noise_length
         self._connections = connections
 
         super().__init__(
@@ -251,6 +292,7 @@ Seismic Networks:
         sampling_rate = trace_params["trace_sampling_rate_hz"]
 
         trace_params["trace_name"] = get_trace_name(event_params, waveform_id)
+        trace_params["trace_category"] = "earthquake"
 
         for pick in picks:
             sample = round((pick.time - actual_t_start) * sampling_rate)
@@ -265,6 +307,89 @@ Seismic Networks:
                 trace_params[f"trace_{pick.phase_hint}_polarity"] = pick.polarity
 
         return trace_params, data
+
+    async def get_noise_data(
+        self, job: NoiseJob, inventory: Inventory
+    ) -> tuple[TraceParameters, np.ndarray]:
+        """
+        Downloads the first candidate window of the job that has data and no gaps.
+
+        :raises ValueError: If no candidate window has data without gaps
+        """
+        waveform_id = job.waveform_id
+        reasons = []
+        for starttime in job.starttimes:
+            request = WaveformRequest(
+                network=waveform_id.network_code,
+                station=waveform_id.station_code,
+                location=waveform_id.location_code or "",
+                channel=waveform_id.channel_code[:2] + "*",
+                starttime=starttime,
+                endtime=starttime + self._noise_length,
+            )
+            try:
+                _, waveform_params, data = await get_waveform_array(
+                    self._client,
+                    inventory,
+                    request,
+                    sampling_rate=SAMPLING_RATE,
+                    component_order=COMPONENT_ORDER,
+                )
+                check_complete(data, waveform_params["trace_completeness"])
+            except (FDSNNoDataException, ValueError) as exc:
+                reasons.append(exc)
+                continue
+            trace_params = get_station_params(waveform_id, inventory, starttime)
+            trace_params.update(waveform_params)
+            trace_params["trace_name"] = job.trace_name
+            trace_params["trace_category"] = "noise"
+            return trace_params, data
+        raise ValueError(
+            f"No candidate window with data and without gaps, last: {reasons[-1]}"
+        )
+
+    def _noise_jobs(
+        self, event_jobs: list, origin_times: list[float]
+    ) -> list[tuple[Source, NoiseJob]]:
+        """
+        Noise jobs for a random fraction of the event jobs. They only depend on the
+        event jobs, so that a resumed download plans the same noise traces.
+
+        :param origin_times: Sorted origin timestamps of all catalog events
+        """
+        n_noise = min(round(self._noise_fraction * len(event_jobs)), len(event_jobs))
+        if n_noise <= 0:
+            return []
+        # Not the generator of the splits, so that the event splits don't change
+        rng = np.random.default_rng(RNG_SEED + 1)
+        swarms = load_swarms()
+        jobs = []
+        for i in np.sort(rng.choice(len(event_jobs), size=n_noise, replace=False)):
+            source, (_, event_params, picks) = event_jobs[i]
+            starttimes = draw_noise_starttimes(
+                rng,
+                UTCDateTime(event_params["source_origin_time"]),
+                self._noise_length,
+                swarms,
+                origin_times,
+            )
+            if not starttimes:
+                continue
+            waveform_id = picks[0].waveform_id
+            noise_job = NoiseJob(
+                trace_name=f"noise_{get_trace_name(event_params, waveform_id)}",
+                waveform_id=waveform_id,
+                split=event_params["split"],
+                starttimes=tuple(starttimes),
+            )
+            jobs.append((source, noise_job))
+        if len(jobs) < n_noise:
+            logger.warning(
+                "%d of %d noise traces have no quiet period nearby.",
+                n_noise - len(jobs),
+                n_noise,
+            )
+        return jobs
 
     def _download_dataset(
         self,
@@ -315,6 +440,12 @@ Seismic Networks:
         done = writer.resumed_trace_names
         if done:
             logger.info("Resuming: %d traces are already downloaded.", len(done))
+        # All catalog events, also those fixup_catalog removes, delimit quiet periods
+        origin_times = sorted(
+            event.preferred_origin().time.timestamp
+            for event in catalog
+            if event.preferred_origin() is not None
+        )
         async with self._client as client:
             # A resumed download keeps the inventory, so stations map to the same
             # networks as before
@@ -351,12 +482,14 @@ Seismic Networks:
                     except KeyError as exc:
                         logger.warning("Skipping station: %s", exc)
                         continue
-                    waveform_id = pick_group[0].waveform_id
-                    if get_trace_name(event_params, waveform_id) in done:
-                        continue
                     jobs.append((source, (event, event_params, pick_group)))
 
+            jobs += self._noise_jobs(jobs, origin_times)
+            jobs = [(source, job) for source, job in jobs if _job_name(job) not in done]
+
             async def download(job):
+                if isinstance(job, NoiseJob):
+                    return await self.get_noise_data(job, inv)
                 _, event_params, picks = job
                 return await self.get_station_waveform_data(
                     event_params=event_params,
@@ -366,7 +499,18 @@ Seismic Networks:
                     time_after=time_after,
                 )
 
+            noise = Counter()
+
             def write(job, result, exc):
+                if isinstance(job, NoiseJob):
+                    if exc is not None:
+                        logger.debug("No noise trace %s: %s", job.trace_name, exc)
+                        noise["failed"] += 1
+                        return
+                    trace_params, data = result
+                    writer.add_trace({"split": job.split, **trace_params}, data)
+                    noise["downloaded"] += 1
+                    return
                 event, event_params, picks = job
                 if exc is not None:
                     logger.warning(
@@ -380,6 +524,13 @@ Seismic Networks:
                 writer.add_trace({**event_params, **trace_params}, data)
 
             await download_parallel(jobs, download, write, checkpoint=writer.checkpoint)
+            if noise:
+                logger.info(
+                    "Noise traces: %d downloaded, %d without a window with data "
+                    "and without gaps.",
+                    noise["downloaded"],
+                    noise["failed"],
+                )
 
 
 def get_trace_name(event_params: EventParameters, waveform_id: WaveformStreamID) -> str:
@@ -388,6 +539,74 @@ def get_trace_name(event_params: EventParameters, waveform_id: WaveformStreamID)
         f"{waveform_id.station_code}.{waveform_id.location_code or ''}."
         f"{waveform_id.channel_code[:2]}"
     )
+
+
+def _job_name(job) -> str:
+    if isinstance(job, NoiseJob):
+        return job.trace_name
+    _, event_params, picks = job
+    return get_trace_name(event_params, picks[0].waveform_id)
+
+
+def load_swarms() -> list[tuple[float, float]]:
+    """
+    The swarm windows of the catalog, see ``scripts/bohemia_swarms.py``, as sorted
+    ``(start, end)`` timestamps.
+    """
+    text = resources.files(__package__).joinpath("bohemia_swarms.csv").read_text()
+    rows = csv.DictReader(
+        line for line in text.splitlines() if not line.startswith("#")
+    )
+    return sorted(
+        (UTCDateTime(row["start"]).timestamp, UTCDateTime(row["end"]).timestamp)
+        for row in rows
+    )
+
+
+def in_swarm(swarms: list[tuple[float, float]], start: float, end: float) -> bool:
+    """
+    Whether the window from ``start`` to ``end`` overlaps a swarm window. ``swarms``
+    are sorted and don't overlap.
+    """
+    i = bisect.bisect_left(swarms, (end,))
+    return i > 0 and swarms[i - 1][1] > start
+
+
+def draw_noise_starttimes(
+    rng: np.random.Generator,
+    time: UTCDateTime,
+    length: float,
+    swarms: list[tuple[float, float]],
+    origin_times: list[float],
+    n: int = NOISE_CANDIDATES,
+    span: float = NOISE_SPAN,
+) -> list[UTCDateTime]:
+    """
+    Random start times of noise windows within ``span`` of ``time``, in quiet
+    periods: outside the swarm windows, away from catalog events, and between the
+    first and the last catalog event. Draws a fixed number of random numbers, so
+    that the times of later windows don't depend on this one.
+
+    :param origin_times: Sorted origin timestamps of all catalog events
+    :return: Up to ``n`` start times, fewer if the quiet periods are too short
+    """
+    draws = rng.uniform(size=NOISE_MAX_DRAWS)
+    low = max(time.timestamp - span, origin_times[0])
+    high = min(time.timestamp + span, origin_times[-1]) - length
+    if high <= low:
+        return []
+    starttimes = []
+    for start in low + draws * (high - low):
+        start = UTCDateTime(round(start, 2))
+        end = start + length
+        if in_swarm(swarms, start.timestamp, end.timestamp):
+            continue
+        if not is_away_from_events(origin_times, start, end):
+            continue
+        starttimes.append(start)
+        if len(starttimes) == n:
+            break
+    return starttimes
 
 
 def _station_key(pick: Pick) -> tuple[str, str, str]:
@@ -489,34 +708,20 @@ def get_event_params(event: Event) -> EventParameters:
     return params
 
 
-def get_trace_params(
-    waveform_id: WaveformStreamID,
-    inventory: Inventory,
-    event_params: EventParameters,
+def get_station_params(
+    waveform_id: WaveformStreamID, inventory: Inventory, time: UTCDateTime
 ) -> TraceParameters:
     try:
         coordinates = inventory.get_coordinates(
-            waveform_id.get_seed_string(),
-            datetime=UTCDateTime(event_params["source_origin_time"]),
+            waveform_id.get_seed_string(), datetime=time
         )
     except Exception as r:
         raise ValueError(
             f"Could not get coordinates for {waveform_id.get_seed_string()}: {r}"
         ) from r
 
-    if not np.isnan(coordinates["latitude"] * coordinates["longitude"]):
-        back_azimuth = gps2dist_azimuth(
-            event_params["source_latitude_deg"],
-            event_params["source_longitude_deg"],
-            coordinates["latitude"],
-            coordinates["longitude"],
-        )[2]
-    else:
-        back_azimuth = np.nan
-
-    trace_params = TraceParameters(
+    return TraceParameters(
         trace_name="foo",
-        path_back_azimuth_deg=back_azimuth,
         station_network_code=waveform_id.network_code,
         station_code=waveform_id.station_code,
         trace_channel=waveform_id.channel_code[:2],
@@ -526,6 +731,26 @@ def get_trace_params(
         station_elevation_m=coordinates["elevation"],
     )
 
+
+def get_trace_params(
+    waveform_id: WaveformStreamID,
+    inventory: Inventory,
+    event_params: EventParameters,
+) -> TraceParameters:
+    trace_params = get_station_params(
+        waveform_id, inventory, UTCDateTime(event_params["source_origin_time"])
+    )
+    latitude = trace_params["station_latitude_deg"]
+    longitude = trace_params["station_longitude_deg"]
+    if not np.isnan(latitude * longitude):
+        trace_params["path_back_azimuth_deg"] = gps2dist_azimuth(
+            event_params["source_latitude_deg"],
+            event_params["source_longitude_deg"],
+            latitude,
+            longitude,
+        )[2]
+    else:
+        trace_params["path_back_azimuth_deg"] = np.nan
     return trace_params
 
 

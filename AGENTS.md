@@ -28,11 +28,16 @@ large for SeisBench itself.
 
 - `uv sync`, then `uv run pytest`. Hooks: `prek install` once, `prek run --all-files`
   to check everything (ruff lint + format, uv lock, basic file checks).
+- End-to-end tests compile tiny subsets from the real data centers. They are
+  deselected by default; run them with `uv sync --extra hinet`, then
+  `EIDA_TOKEN=<file> DLF_CATALOG_DIR=<quakeml dir> HINET_USER=<user>
+  HINET_PASSWORD=<password> uv run pytest -m e2e tests/e2e` (~2 min). Never write
+  credentials into files.
 - Depend on released SeisBench (`seisbench>=0.12.7`), and don't change SeisBench
   for this repo. `resume.py` overrides private `WaveformDataWriter` methods
   (`_write_bucket`, `_finalize`) and attributes (`_metadata`, `_waveform_file`,
   `_bucket_counter`); check them when raising the SeisBench version.
-- Tests must not touch the network. Mock the client, see `tests/data/test_dlf.py`.
+- Unit tests must not touch the network. Mock the client, see `tests/data/test_dlf.py`.
 - Hi-net data may not be redistributed, WEBNET (WB) data are restricted: never
   commit or upload compiled data.
 - Dataset class names set the folder in the SeisBench cache

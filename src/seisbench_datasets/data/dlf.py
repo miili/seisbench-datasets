@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import bisect
 import csv
 import json
 from collections import Counter, defaultdict
@@ -35,6 +34,7 @@ from seisbench_datasets.data.multiclient import (
     get_cached_inventory,
     get_waveform_array,
 )
+from seisbench_datasets.data.noise import NOISE_GAP_BEFORE_EVENT, is_away_from_events
 from seisbench_datasets.data.resume import ResumableBenchmarkDataset
 
 # One QuakeML file per region, <region>.xml. Japan needs a Hi-net account.
@@ -53,9 +53,6 @@ NCEDC_NETWORKS = ("BK", "NC", "BG", "NN", "WR")
 COMPONENT_ORDER = "ZNE"
 SAMPLING_RATE = 100.0
 
-# Noise windows end this long before a catalog event and start this long after one
-NOISE_GAP_BEFORE_EVENT = 120.0
-NOISE_GAP_AFTER_EVENT = 180.0
 # Noise windows are rejected if the STA/LTA of a bandpassed component exceeds the
 # threshold. The data before the window lets the filter and the LTA settle.
 NOISE_FREQMIN = 1.0
@@ -1040,20 +1037,6 @@ def check_quiet(
         max_ratio = ratio[window_start:].max()
         if max_ratio > NOISE_MAX_STA_LTA:
             raise NotQuietError(f"STA/LTA {max_ratio:.1f} exceeds {NOISE_MAX_STA_LTA}.")
-
-
-def is_away_from_events(
-    origin_times: list[float], starttime: UTCDateTime, endtime: UTCDateTime
-) -> bool:
-    """
-    Whether a window keeps the noise gaps to all events. ``origin_times`` are sorted
-    timestamps.
-    """
-    i = bisect.bisect_right(origin_times, starttime.timestamp - NOISE_GAP_AFTER_EVENT)
-    return (
-        i == len(origin_times)
-        or origin_times[i] >= endtime.timestamp + NOISE_GAP_BEFORE_EVENT
-    )
 
 
 __all__ = ["DeepLowFrequency"]

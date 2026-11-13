@@ -45,4 +45,8 @@ ignore = ["B027"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "e2e: compiles tiny datasets from the real data centers (select with '-m e2e')",
+]
+addopts = "-m 'not e2e'"

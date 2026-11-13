@@ -9,7 +9,7 @@ finds them, and an interrupted download resumes where it stopped.
 
 | Dataset | Content | Sources |
 | --- | --- | --- |
-| `BohemiaSaxony` | Local earthquakes in NW Bohemia / Vogtland and Saxony, 2009–2024, manual P and S picks | BGR, GFZ (SX, WB, TH, CZ) |
+| `BohemiaSaxony` | Local earthquakes in NW Bohemia / Vogtland and Saxony, 2009–2024, manual P and S picks, plus noise from quiet periods | BGR, GFZ (SX, WB, TH, CZ) |
 | `DeepLowFrequency` | Deep low-frequency (DLF / DLP) events below volcanoes in Alaska, Japan, Hawaii, N. California, the Cascades and the Eifel, plus noise windows | EarthScope, NCEDC, BGR, GFZ, NIED Hi-net |
 
 ## Install
@@ -49,6 +49,11 @@ first to get the live table there, too.
 
 - **BohemiaSaxony**: the WEBNET (WB) data are restricted and need an
   [EIDA token](https://doi.org/10.7914/SN/WB). No precompiled version is distributed.
+  Noise traces (`trace_category = "noise"`, 30% of the event traces by default) are
+  taken at random times in quiet periods, not selected by STA/LTA: outside the swarm
+  windows in `src/seisbench_datasets/data/bohemia_swarms.csv` (from
+  `scripts/bohemia_swarms.py`), away from catalog events, within 30 days of an event
+  at the same station.
 - **DeepLowFrequency**: Hi-net data may not be redistributed. Hi-net downloads are
   cached in blocks of 5 minutes in `~/.cache/seisbench-datasets/hinet/` (or
   `$SEISBENCH_DATASETS_CACHE`), so compiling again with other windows reuses them.
