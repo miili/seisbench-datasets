@@ -16,6 +16,8 @@ large for SeisBench itself.
   check. Dataset `_download_dataset` methods must skip
   `writer.resumed_trace_names` and pass `writer.checkpoint` to `download_parallel`.
 - `src/seisbench_datasets/data/bohemia.py`, `dlf.py`: the datasets.
+- `scripts/bohemia_swarms.py` writes `src/seisbench_datasets/data/bohemia_swarms.csv`, the
+  swarm windows of the Bohemia catalog. Edit the parameters there, not the CSV by hand.
 - `src/seisbench_datasets/cli.py`: typer CLI `seisbench-datasets`, one command per dataset.
 - `src/seisbench_datasets/progress.py`: rich logging and the live download table.
   `download_parallel` drives it; the table only shows after `setup_logging()`, so logs

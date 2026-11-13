@@ -26,3 +26,9 @@ Unlike `DeepLowFrequency`, which rejects noise windows by STA/LTA, the noise is
 taken from quiet periods: a list of busy (swarm) periods is defined, and noise
 windows are drawn only outside of them. This keeps the noise realistic, without
 an STA/LTA trigger biasing it towards the quietest windows.
+
+The swarm windows are in `src/seisbench_datasets/data/bohemia_swarms.csv`,
+extracted from the catalog with `scripts/bohemia_swarms.py` (busy day: ≥ 10
+events; 63 windows, 701 days, about half of the events). The catalog has almost
+no events before 2011 (none in 2009): there, no swarm means no monitoring, not
+quiet, so noise should only be drawn from the period the catalog covers.
