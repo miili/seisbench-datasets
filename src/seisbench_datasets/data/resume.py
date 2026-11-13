@@ -110,6 +110,15 @@ class ResumableWriter(WaveformDataWriter):
         metadata.to_csv(tmp_path, index=False)
         tmp_path.replace(self.metadata_path)
 
+    def set_default(self, column: str, value) -> None:
+        """
+        Sets ``column`` of the resumed traces that have no value, e.g., a column
+        added after the files were written.
+        """
+        for row in self._metadata:
+            if row.get(column, "") == "":
+                row[column] = value
+
     def checkpoint(self) -> None:
         """
         Writes all traces added so far to disk, waveforms and metadata, so that an
@@ -267,7 +276,7 @@ class ResumableBenchmarkDataset(WaveformBenchmarkDataset):
     ):
         download_kwargs = download_kwargs or {}
         if compile_from_source:
-            files = [self.path / file.replace("$CHUNK", "") for file in self._files]
+            files = self.files()
             compile_if_uncached(
                 files,
                 lambda partial_files: self._compile(partial_files, **download_kwargs),
@@ -286,6 +295,41 @@ class ResumableBenchmarkDataset(WaveformBenchmarkDataset):
             download_kwargs=download_kwargs,
             **kwargs,
         )
+
+    @classmethod
+    def planned_trace_names(cls) -> set[str] | None:
+        """
+        The names of the event traces the dataset should contain, to find missing
+        traces, or None if the dataset can't plan them without downloading.
+        """
+        return None
+
+    @classmethod
+    def files(cls) -> list[Path]:
+        return [
+            cls._path_internal() / file.replace("$CHUNK", "") for file in cls._files
+        ]
+
+    @classmethod
+    def reopen(cls) -> None:
+        """
+        Turns the files of a compiled dataset back into partial files, so that
+        creating the dataset resumes from them: it downloads the traces that are
+        missing, e.g., to fill up a dataset with traces that failed or with noise.
+        Until the compilation finishes, SeisBench can't load the dataset.
+
+        :raises RuntimeError: If a compilation into the folder is running
+        """
+        files = cls.files()
+        lock = try_lock(files[0])
+        if lock is None:
+            raise RuntimeError(f"A download into {files[0].parent} is running.")
+        try:
+            for file in files:
+                if file.is_file():
+                    file.rename(file.parent / (file.name + ".partial"))
+        finally:
+            lock.close()
 
     def _compile(self, files: list[Path], **kwargs) -> None:
         logger.warning(

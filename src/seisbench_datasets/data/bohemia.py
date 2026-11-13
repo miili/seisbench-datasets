@@ -14,8 +14,9 @@ from urllib.parse import urljoin
 from zipfile import ZipFile
 
 import numpy as np
+import pandas as pd
 import seisbench
-from obspy import Inventory, UTCDateTime
+from obspy import Inventory, UTCDateTime, read_inventory
 from obspy.clients.fdsn.header import URL_MAPPINGS, FDSNNoDataException
 from obspy.core.event.base import QuantityError, WaveformStreamID
 from obspy.core.event.catalog import Catalog, Event
@@ -90,6 +91,25 @@ NOISE_SPAN = 30 * 86400.0
 # Candidate windows per noise trace, the first one without gaps is used
 NOISE_CANDIDATES = 5
 NOISE_MAX_DRAWS = 1000
+# Rounds of noise downloads, each tops up the noise that failed in the round before
+NOISE_MAX_ROUNDS = 3
+
+EventJob = tuple[Event, EventParameters, list[Pick]]
+
+
+class Anchor(NamedTuple):
+    """
+    An event trace of the dataset, at whose station and near whose time a noise
+    trace can be drawn.
+    """
+
+    trace_name: str
+    split: str
+    origin_time: str
+    network: str
+    station: str
+    location: str
+    channel: str
 
 
 class NoiseJob(NamedTuple):
@@ -119,12 +139,14 @@ class BohemiaSaxony(ResumableBenchmarkDataset):
         The dataset is compiled from FDSN web services on first use. An interrupted
         download resumes where it stopped when the dataset is created again.
 
-    Noise traces (``trace_category = "noise"``) are added for a fraction of the
-    event traces (``trace_category = "earthquake"``), at the same station and with
-    the split of the event trace. They are taken from quiet periods, not selected by
-    STA/LTA: at a random time within 30 days of the event, outside the swarm windows
-    of the catalog (``bohemia_swarms.csv``), at least 120 s before and 180 s after
-    every catalog event. Of 5 candidate windows, the first without gaps is used.
+    Noise traces (``trace_category = "noise"``) make up ``noise_fraction`` of the
+    event traces (``trace_category = "earthquake"``) of each split. Each is drawn at
+    the station of a random event trace of the split, in a quiet period, not selected
+    by STA/LTA: at a random time within 30 days of the event, outside the swarm
+    windows of the catalog (``bohemia_swarms.csv``), at least 120 s before and 180 s
+    after every catalog event. Of 5 candidate windows, the first without gaps is
+    used. The noise is planned after the event traces, from the event traces in the
+    dataset, so a resumed or filled-up dataset reaches the same proportions.
 
     :param eida_token: EIDA token or path to a token file, for the restricted WB data
     :param noise_fraction: Fraction of the event traces that get a noise trace. 0
@@ -193,8 +215,9 @@ Seismic Networks:
             ]
         )
 
-    def _download_catalog_colm(self, path: Path) -> Path:
-        files = list((self.path / "final2").glob("cll_*.txt"))
+    @staticmethod
+    def _download_catalog_colm(path: Path) -> Path:
+        files = list((path / "final2").glob("cll_*.txt"))
         if files:
             logger.debug("Catalog files already exist, skipping download.")
             return path
@@ -235,9 +258,11 @@ Seismic Networks:
             force_download=force_download,
         )
 
-    def get_catalog(self) -> Catalog:
-        self._download_catalog_colm(self.path)
-        nordic_files = sorted((self.path / "final2").glob("cll_*.txt"))
+    @classmethod
+    def get_catalog(cls) -> Catalog:
+        path = cls._path_internal()
+        cls._download_catalog_colm(path)
+        nordic_files = sorted((path / "final2").glob("cll_*.txt"))
 
         catalog = Catalog()
         for file in nordic_files:
@@ -328,7 +353,7 @@ Seismic Networks:
                 endtime=starttime + self._noise_length,
             )
             try:
-                _, waveform_params, data = await get_waveform_array(
+                seed_id, waveform_params, data = await get_waveform_array(
                     self._client,
                     inventory,
                     request,
@@ -339,7 +364,10 @@ Seismic Networks:
             except (FDSNNoDataException, ValueError) as exc:
                 reasons.append(exc)
                 continue
-            trace_params = get_station_params(waveform_id, inventory, starttime)
+            # The seed id has the full channel code, the job only the band and instrument
+            trace_params = get_station_params(
+                WaveformStreamID(seed_string=seed_id), inventory, starttime
+            )
             trace_params.update(waveform_params)
             trace_params["trace_name"] = job.trace_name
             trace_params["trace_category"] = "noise"
@@ -348,47 +376,78 @@ Seismic Networks:
             f"No candidate window with data and without gaps, last: {reasons[-1]}"
         )
 
+    @classmethod
+    def planned_trace_names(cls) -> set[str]:
+        """
+        The names of the event traces the catalog plans, offline, with the inventory
+        in the dataset folder. Reads the whole catalog, which takes about a minute.
+        """
+        inventory = read_inventory(str(cls._path_internal() / "inventory.xml"))
+        catalog = fixup_catalog(cls.get_catalog(), inventory)
+        return {_job_name(job) for job in plan_event_jobs(catalog)}
+
     def _noise_jobs(
-        self, event_jobs: list, origin_times: list[float]
+        self,
+        client: MultiClient,
+        anchors: list[Anchor],
+        noise: Counter,
+        tried: set[str],
+        origin_times: list[float],
+        rng: np.random.Generator,
     ) -> list[tuple[Source, NoiseJob]]:
         """
-        Noise jobs for a random fraction of the event jobs. They only depend on the
-        event jobs, so that a resumed download plans the same noise traces.
+        Noise jobs for the splits with less noise than ``noise_fraction`` of their
+        event traces, as many as are missing. Each is drawn at a random anchor of the
+        split that wasn't tried before.
 
+        :param noise: Noise traces in the dataset per split
+        :param tried: Names of the anchors already used, extended by this call
         :param origin_times: Sorted origin timestamps of all catalog events
         """
-        n_noise = min(round(self._noise_fraction * len(event_jobs)), len(event_jobs))
-        if n_noise <= 0:
-            return []
-        # Not the generator of the splits, so that the event splits don't change
-        rng = np.random.default_rng(RNG_SEED + 1)
         swarms = load_swarms()
+        events = Counter(anchor.split for anchor in anchors)
         jobs = []
-        for i in np.sort(rng.choice(len(event_jobs), size=n_noise, replace=False)):
-            source, (_, event_params, picks) = event_jobs[i]
-            starttimes = draw_noise_starttimes(
-                rng,
-                UTCDateTime(event_params["source_origin_time"]),
-                self._noise_length,
-                swarms,
-                origin_times,
-            )
-            if not starttimes:
+        n_no_quiet = 0
+        for split in sorted(events):
+            missing = round(self._noise_fraction * events[split]) - noise[split]
+            if missing <= 0:
                 continue
-            waveform_id = picks[0].waveform_id
-            noise_job = NoiseJob(
-                trace_name=f"noise_{get_trace_name(event_params, waveform_id)}",
-                waveform_id=waveform_id,
-                split=event_params["split"],
-                starttimes=tuple(starttimes),
+            pool = sorted(
+                anchor
+                for anchor in anchors
+                if anchor.split == split and anchor.trace_name not in tried
             )
-            jobs.append((source, noise_job))
-        if len(jobs) < n_noise:
-            logger.warning(
-                "%d of %d noise traces have no quiet period nearby.",
-                n_noise - len(jobs),
-                n_noise,
-            )
+            for i in rng.permutation(len(pool)):
+                if missing == 0:
+                    break
+                anchor = pool[i]
+                tried.add(anchor.trace_name)
+                try:
+                    source = client.get_source(anchor.network)
+                except KeyError:
+                    continue
+                starttimes = draw_noise_starttimes(
+                    rng,
+                    UTCDateTime(anchor.origin_time),
+                    self._noise_length,
+                    swarms,
+                    origin_times,
+                )
+                if not starttimes:
+                    n_no_quiet += 1
+                    continue
+                noise_job = NoiseJob(
+                    trace_name=f"noise_{anchor.trace_name}",
+                    waveform_id=WaveformStreamID(
+                        anchor.network, anchor.station, anchor.location, anchor.channel
+                    ),
+                    split=split,
+                    starttimes=tuple(starttimes),
+                )
+                jobs.append((source, noise_job))
+                missing -= 1
+        if n_no_quiet:
+            logger.info("%d anchors have no quiet period nearby.", n_no_quiet)
         return jobs
 
     def _download_dataset(
@@ -446,46 +505,28 @@ Seismic Networks:
             for event in catalog
             if event.preferred_origin() is not None
         )
+        # Datasets compiled before the noise traces have no trace category
+        writer.set_default("trace_category", "earthquake")
+        anchors, noise = anchors_from_metadata(writer.resumed_metadata)
+        tried = {
+            name.removeprefix("noise_") for name in done if name.startswith("noise_")
+        }
+
         async with self._client as client:
             # A resumed download keeps the inventory, so stations map to the same
             # networks as before
             inv = await self.get_inventory(catalog, force_download=not done)
             catalog = fixup_catalog(catalog, inv)
 
-            # A new generator for every download, so the splits are the same in a
-            # resumed download
-            rng = np.random.default_rng(RNG_SEED)
             jobs = []
-            source_ids = Counter()
-            for event in catalog:
-                split = get_split(rng)
-                try:
-                    event_params = get_event_params(event)
-                except ValueError as exc:
-                    logger.warning("Skipping event %s: %s", event.short_str(), exc)
+            for job in plan_event_jobs(catalog):
+                if _job_name(job) in done:
                     continue
-                event_params["split"] = split
-                # The catalog lists a few events twice
-                source_ids[event_params["source_id"]] += 1
-                if source_ids[event_params["source_id"]] > 1:
-                    event_params["source_id"] += (
-                        f"_{source_ids[event_params['source_id']]}"
-                    )
-
-                # groupby only groups adjacent picks, so sort them by station first
-                picks = sorted(event.picks, key=_station_key)
-                for _, pick_group in groupby(picks, key=_station_key):
-                    pick_group = list(pick_group)
-                    network = pick_group[0].waveform_id.network_code
-                    try:
-                        source = client.get_source(network)
-                    except KeyError as exc:
-                        logger.warning("Skipping station: %s", exc)
-                        continue
-                    jobs.append((source, (event, event_params, pick_group)))
-
-            jobs += self._noise_jobs(jobs, origin_times)
-            jobs = [(source, job) for source, job in jobs if _job_name(job) not in done]
+                network = job[2][0].waveform_id.network_code
+                try:
+                    jobs.append((client.get_source(network), job))
+                except KeyError as exc:
+                    logger.warning("Skipping station: %s", exc)
 
             async def download(job):
                 if isinstance(job, NoiseJob):
@@ -499,17 +540,18 @@ Seismic Networks:
                     time_after=time_after,
                 )
 
-            noise = Counter()
+            n_noise_failed = 0
 
             def write(job, result, exc):
+                nonlocal n_noise_failed
                 if isinstance(job, NoiseJob):
                     if exc is not None:
                         logger.debug("No noise trace %s: %s", job.trace_name, exc)
-                        noise["failed"] += 1
+                        n_noise_failed += 1
                         return
                     trace_params, data = result
                     writer.add_trace({"split": job.split, **trace_params}, data)
-                    noise["downloaded"] += 1
+                    noise[job.split] += 1
                     return
                 event, event_params, picks = job
                 if exc is not None:
@@ -522,15 +564,115 @@ Seismic Networks:
                     return
                 trace_params, data = result
                 writer.add_trace({**event_params, **trace_params}, data)
-
-            await download_parallel(jobs, download, write, checkpoint=writer.checkpoint)
-            if noise:
-                logger.info(
-                    "Noise traces: %d downloaded, %d without a window with data "
-                    "and without gaps.",
-                    noise["downloaded"],
-                    noise["failed"],
+                waveform_id = picks[0].waveform_id
+                anchors.append(
+                    Anchor(
+                        trace_name=trace_params["trace_name"],
+                        split=event_params["split"],
+                        origin_time=event_params["source_origin_time"],
+                        network=waveform_id.network_code,
+                        station=waveform_id.station_code,
+                        location=waveform_id.location_code or "",
+                        channel=waveform_id.channel_code[:2],
+                    )
                 )
+
+            await download_parallel(
+                jobs, download, write, checkpoint=writer.checkpoint, title="Events"
+            )
+
+            # Not the generator of the splits, so that the event splits don't change
+            rng = np.random.default_rng(RNG_SEED + 1)
+            for i_round in range(NOISE_MAX_ROUNDS):
+                jobs = self._noise_jobs(
+                    client, anchors, noise, tried, origin_times, rng
+                )
+                if not jobs:
+                    break
+                logger.info(
+                    "Noise round %d: %d noise traces to reach the noise fraction.",
+                    i_round + 1,
+                    len(jobs),
+                )
+                await download_parallel(
+                    jobs,
+                    download,
+                    write,
+                    checkpoint=writer.checkpoint,
+                    title=f"Noise round {i_round + 1}",
+                )
+            events = Counter(anchor.split for anchor in anchors)
+            logger.info(
+                "Noise traces per split: %s. %d without a window with data and "
+                "without gaps.",
+                ", ".join(
+                    f"{split} {noise[split]} ({noise[split] / events[split]:.1%})"
+                    for split in sorted(events)
+                ),
+                n_noise_failed,
+            )
+
+
+def plan_event_jobs(catalog: Catalog) -> list[EventJob]:
+    """
+    One job per event and station of the catalog, after :py:func:`fixup_catalog`.
+    Source ids and splits are deterministic, so a resumed download plans the same.
+    """
+    # A new generator for every plan, so the splits are the same in a resumed download
+    rng = np.random.default_rng(RNG_SEED)
+    jobs = []
+    source_ids = Counter()
+    for event in catalog:
+        split = get_split(rng)
+        try:
+            event_params = get_event_params(event)
+        except ValueError as exc:
+            logger.warning("Skipping event %s: %s", event.short_str(), exc)
+            continue
+        event_params["split"] = split
+        # The catalog lists a few events twice
+        source_ids[event_params["source_id"]] += 1
+        if source_ids[event_params["source_id"]] > 1:
+            event_params["source_id"] += f"_{source_ids[event_params['source_id']]}"
+
+        # groupby only groups adjacent picks, so sort them by station first
+        picks = sorted(event.picks, key=_station_key)
+        for _, pick_group in groupby(picks, key=_station_key):
+            jobs.append((event, event_params, list(pick_group)))
+    return jobs
+
+
+def anchors_from_metadata(metadata: pd.DataFrame) -> tuple[list[Anchor], Counter]:
+    """
+    The event traces of a dataset as anchors for noise traces, and the number of
+    noise traces per split. Traces without a category are event traces.
+
+    :param metadata: Metadata as text, e.g., ``ResumableWriter.resumed_metadata``
+    """
+    if metadata.empty:
+        return [], Counter()
+    names = metadata["trace_name"]
+    if "trace_name_original" in metadata:
+        original = metadata["trace_name_original"]
+        names = original.where(original != "", names)
+    category = metadata.get("trace_category", pd.Series("", index=metadata.index))
+    is_noise = category == "noise"
+    noise = Counter(metadata.loc[is_noise, "split"])
+    events = metadata[~is_noise]
+    anchors = [
+        Anchor(*row)
+        for row in zip(
+            names[~is_noise],
+            events["split"],
+            events["source_origin_time"],
+            events["station_network_code"],
+            events["station_code"],
+            events["station_location_code"],
+            events["trace_channel"],
+            strict=True,
+        )
+    ]
+    return anchors, noise
 
 
 def get_trace_name(event_params: EventParameters, waveform_id: WaveformStreamID) -> str:
@@ -762,7 +904,7 @@ def fixup_catalog(catalog: Catalog, inventory: Inventory) -> Catalog:
     for event in catalog.events.copy():
         origin = event.preferred_origin()
         if origin is None:
-            logger.info("Removing event %s without origin.", event.resource_id)
+            logger.debug("Removing event %s without origin.", event.resource_id)
             catalog.events.remove(event)
             continue
         origin_time = origin.time
@@ -804,7 +946,7 @@ def fixup_catalog(catalog: Catalog, inventory: Inventory) -> Catalog:
                 event.picks.remove(pick)
 
         if not event.picks:
-            logger.info("Removing event %s with no picks.", event.resource_id)
+            logger.debug("Removing event %s with no picks.", event.resource_id)
             catalog.events.remove(event)
 
     return catalog

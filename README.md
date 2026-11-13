@@ -33,6 +33,19 @@ A live table shows the downloads per data center (done, failed, time left), the
 logs run above it. Stop with Ctrl-C and run the same command again to resume.
 `--force` moves an existing dataset to a backup folder and compiles it anew.
 
+```sh
+seisbench-datasets bohemia --check     # or --validate; downloads nothing
+seisbench-datasets bohemia --fill-up --eida-token ~/.eidatoken
+```
+
+`--check` reports the event and noise traces per split against `--noise-fraction`,
+traces without waveforms in the HDF5 file, and, for BohemiaSaxony, the event traces
+the catalog plans that are missing (it reads the whole catalog, about a minute). It
+also checks the partial files of an interrupted compilation. `--fill-up` downloads
+what a compiled dataset is missing: planned traces that failed before, and noise
+traces up to the noise fraction of each split. The dataset can't be loaded until the
+fill-up finishes; an interrupted fill-up resumes like a compilation.
+
 ## Use
 
 ```python

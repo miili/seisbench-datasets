@@ -19,7 +19,13 @@ large for SeisBench itself.
 - `src/seisbench_datasets/data/bohemia.py`, `dlf.py`: the datasets.
 - `scripts/bohemia_swarms.py` writes `src/seisbench_datasets/data/bohemia_swarms.csv`, the
   swarm windows of the Bohemia catalog. Edit the parameters there, not the CSV by hand.
-- `src/seisbench_datasets/cli.py`: typer CLI `seisbench-datasets`, one command per dataset.
+- `src/seisbench_datasets/cli.py`: typer CLI `seisbench-datasets`, one command per dataset,
+  each with `--check` (`check.py`, read-only) and `--fill-up`
+  (`ResumableBenchmarkDataset.reopen`: the files become partial files again, so the
+  compilation resumes into them).
+- Noise is planned by proportion, not 1:1: after the event traces, each split gets
+  `round(noise_fraction * event traces) - noise traces` more, drawn at random event
+  traces (anchors) with a seeded generator. Which anchors doesn't matter.
 - `src/seisbench_datasets/progress.py`: rich logging and the live download table.
   `download_parallel` drives it; the table only shows after `setup_logging()`, so logs
   don't tear through it. SeisBench's tqdm bar is disabled in `ResumableWriter`.

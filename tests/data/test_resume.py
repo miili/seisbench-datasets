@@ -186,3 +186,54 @@ def test_dataset_resume(tmp_path):
     assert _ToyDataset.added == ["a", "b", "c", "d"]
     assert len(dataset) == 4
     assert not (path / "metadata.csv.lock").exists()
+
+
+class _GrowingDataset(ResumableBenchmarkDataset):
+    names = "ab"
+    added = []
+
+    def __init__(self, **kwargs):
+        super().__init__(repository_lookup=False, **kwargs)
+
+    def _download_dataset(self, writer, **kwargs):
+        writer.data_format = {"dimension_order": "CW", "component_order": "ZNE"}
+        writer.set_default("trace_category", "earthquake")
+        for name in self.names:
+            if name not in writer.resumed_trace_names:
+                writer.add_trace(
+                    {
+                        "trace_name": name,
+                        "split": "train",
+                        "trace_category": "earthquake",
+                    },
+                    np.zeros((3, 9)),
+                )
+                self.added.append(name)
+
+
+def test_reopen_fills_up():
+    _GrowingDataset()
+    assert _GrowingDataset.added == ["a", "b"]
+
+    # A finished dataset is not compiled again
+    _GrowingDataset.names = "abcd"
+    assert len(_GrowingDataset()) == 2
+
+    _GrowingDataset.reopen()
+    assert not any(file.is_file() for file in _GrowingDataset.files())
+    dataset = _GrowingDataset()
+    assert _GrowingDataset.added == ["a", "b", "c", "d"]
+    assert len(dataset) == 4
+    # Traces written before the column existed get the default
+    assert set(dataset.metadata["trace_category"]) == {"earthquake"}
+
+
+def test_reopen_running(tmp_path):
+    _GrowingDataset.names = "a"
+    _GrowingDataset()
+    if sys.platform != "win32":  # Without fcntl, nothing is locked
+        lock = try_lock(_GrowingDataset.files()[0])
+        with pytest.raises(RuntimeError, match="running"):
+            _GrowingDataset.reopen()
+        lock.close()
+        assert all(file.is_file() for file in _GrowingDataset.files())

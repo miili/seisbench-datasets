@@ -1,15 +1,19 @@
 import asyncio
+from collections import Counter
 
 import numpy as np
+import pandas as pd
 import pytest
 from obspy import UTCDateTime
 from obspy.clients.fdsn.header import FDSNNoDataException
-from obspy.core.event import Pick, WaveformStreamID
+from obspy.core.event import WaveformStreamID
 
 from seisbench_datasets.data.bohemia import (
     NOISE_CANDIDATES,
+    Anchor,
     BohemiaSaxony,
     NoiseJob,
+    anchors_from_metadata,
     draw_noise_starttimes,
     in_swarm,
     load_swarms,
@@ -75,15 +79,16 @@ def test_draw_noise_starttimes():
     assert draw_noise_starttimes(rng, event, 120.0, long_swarm, origin_times) == []
 
 
-def _event_job(i, split):
-    waveform_id = WaveformStreamID("WB", f"S{i:02d}", "", "SHZ")
-    event_params = {
-        "source_id": f"bs_{i}",
-        "source_origin_time": str(UTCDateTime(2020, 1, 1) + i * DAY),
-        "split": split,
-    }
-    pick = Pick(time=UTCDateTime(2020, 1, 1) + i * DAY, waveform_id=waveform_id)
-    return "source", (None, event_params, [pick])
+def _anchor(i, split, network="WB"):
+    return Anchor(
+        trace_name=f"bs_{i}_{network}.S{i:02d}..SH",
+        split=split,
+        origin_time=str(UTCDateTime(2020, 1, 1) + i * DAY),
+        network=network,
+        station=f"S{i:02d}",
+        location="",
+        channel="SH",
+    )
 
 
 def _dataset(noise_fraction=0.3, noise_length=120.0):
@@ -94,27 +99,93 @@ def _dataset(noise_fraction=0.3, noise_length=120.0):
     return dataset
 
 
-def test_noise_jobs(monkeypatch):
-    monkeypatch.setattr("seisbench_datasets.data.bohemia.load_swarms", lambda: [])
-    event_jobs = [_event_job(i, "test" if i % 2 else "train") for i in range(20)]
-    origin_times = [(UTCDateTime(2020, 1, 1) + i * DAY).timestamp for i in range(20)]
+class _Client:
+    def get_source(self, network):
+        if network == "XX":
+            raise KeyError(f"No source serves network {network}.")
+        return "source"
 
-    jobs = _dataset()._noise_jobs(event_jobs, origin_times)
-    assert len(jobs) == 6
+
+def test_noise_jobs_by_proportion(monkeypatch):
+    monkeypatch.setattr("seisbench_datasets.data.bohemia.load_swarms", lambda: [])
+    anchors = [_anchor(i, "train") for i in range(20)]
+    anchors += [_anchor(i, "test") for i in range(20, 30)]
+    anchors += [_anchor(30, "test", network="XX")]  # No source
+    origin_times = sorted(UTCDateTime(a.origin_time).timestamp for a in anchors)
+    noise = Counter(train=2)
+    tried = {"bs_0_WB.S00..SH"}  # Has a noise trace already
+
+    def plan(seed=0):
+        return _dataset()._noise_jobs(
+            _Client(),
+            anchors,
+            noise,
+            set(tried),
+            origin_times,
+            np.random.default_rng(seed),
+        )
+
+    jobs = plan()
+    # 30% of 20 train traces minus the 2 there, 30% of 11 test traces
+    assert Counter(job.split for _, job in jobs) == {"train": 4, "test": 3}
+    by_name = {a.trace_name: a for a in anchors}
     for source, job in jobs:
         assert source == "source"
-        i = int(job.waveform_id.station_code[1:])
-        assert job.trace_name == f"noise_bs_{i}_WB.S{i:02d}..SH"
-        assert job.split == event_jobs[i][1][1]["split"]
+        anchor = by_name[job.trace_name.removeprefix("noise_")]
+        assert anchor.split == job.split
+        assert anchor.network != "XX"
+        assert anchor.trace_name not in tried
+        assert job.waveform_id.station_code == anchor.station
         assert len(job.starttimes) == NOISE_CANDIDATES
 
-    # Deterministic, so that a resumed download plans the same noise traces
-    assert _dataset()._noise_jobs(event_jobs, origin_times) == jobs
-    assert _dataset(noise_fraction=0)._noise_jobs(event_jobs, origin_times) == []
+    # Seeded
+    assert plan() == jobs
+    # Only the proportions count, not which anchors
+    assert Counter(j.split for _, j in plan(seed=1)) == {"train": 4, "test": 3}
+
+    # Enough noise
+    full = _dataset()._noise_jobs(
+        _Client(),
+        anchors,
+        Counter(train=6, test=3),
+        set(),
+        origin_times,
+        np.random.default_rng(0),
+    )
+    assert full == []
+
+
+def test_anchors_from_metadata():
+    old = pd.DataFrame(
+        {
+            "trace_name": ["bucket0$0,:3,:100", "bucket0$1,:3,:100"],
+            "trace_name_original": ["bs_1_WB.A..SH", "bs_2_SX.B..HH"],
+            "split": ["train", "dev"],
+            "source_origin_time": ["2020-01-01T00:00:00Z", "2020-01-02T00:00:00Z"],
+            "station_network_code": ["WB", "SX"],
+            "station_code": ["A", "B"],
+            "station_location_code": ["", ""],
+            "trace_channel": ["SH", "HH"],
+        }
+    )
+    anchors, noise = anchors_from_metadata(old)
+    # Without a trace category, all traces are event traces
+    assert [a.trace_name for a in anchors] == ["bs_1_WB.A..SH", "bs_2_SX.B..HH"]
+    assert anchors[1].split == "dev" and anchors[1].channel == "HH"
+    assert noise == {}
+
+    new = old.assign(trace_category=["earthquake", "noise"])
+    anchors, noise = anchors_from_metadata(new)
+    assert [a.trace_name for a in anchors] == ["bs_1_WB.A..SH"]
+    assert noise == {"dev": 1}
+    assert anchors_from_metadata(pd.DataFrame()) == ([], Counter())
 
 
 class _Inventory:
     def get_coordinates(self, seed_id, datetime):
+        # A real inventory only knows full channel codes
+        if len(seed_id.split(".")[-1]) != 3:
+            raise Exception(f"No matching coordinates found for {seed_id}")
         return {"latitude": 50.2, "longitude": 12.4, "elevation": 500.0}
 
 
@@ -141,7 +212,7 @@ def test_noise_data_takes_first_complete_window(monkeypatch):
     )
     job = NoiseJob(
         trace_name="noise_a",
-        waveform_id=WaveformStreamID("WB", "S01", "", "SHZ"),
+        waveform_id=WaveformStreamID("WB", "S01", "", "SH"),  # As from an anchor
         split="dev",
         starttimes=tuple(starts),
     )

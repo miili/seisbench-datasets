@@ -20,6 +20,7 @@ import seisbench
 from obspy import Catalog, UTCDateTime, read_events
 from obspy.io.nordic.core import read_nordic
 
+from seisbench_datasets.check import check_dataset, print_report
 from seisbench_datasets.data.bohemia import BohemiaSaxony, in_swarm, load_swarms
 from seisbench_datasets.data.dlf import DeepLowFrequency
 
@@ -37,21 +38,26 @@ class TinyBohemia(BohemiaSaxony):
     between them.
     """
 
-    def get_catalog(self):
-        self._download_catalog_colm(self.path)
-        text = (self.path / "final2" / "cll_2018.txt").read_text().replace("\r", "")
+    @classmethod
+    def get_catalog(cls):
+        path = cls._path_internal()
+        cls._download_catalog_colm(path)
+        text = (path / "final2" / "cll_2018.txt").read_text().replace("\r", "")
         events = [e for e in re.split(r"\n[ \t]*\n", text) if e.strip()]
         subset = [events[0], events[len(events) // 2], events[-1]]
-        file = self.path / "tiny_catalog.txt"
+        file = path / "tiny_catalog.txt"
         file.write_text("\n\n".join(subset) + "\n\n")
         return read_nordic(str(file))
 
 
-def test_bohemia():
+def _copy_bohemia_catalog():
     catalog = REAL_DATA_ROOT / "bohemiasaxony" / "final2"
     if catalog.is_dir():
         shutil.copytree(catalog, TinyBohemia._path_internal() / "final2")
 
+
+def test_bohemia():
+    _copy_bohemia_catalog()
     dataset = TinyBohemia(eida_token=EIDA_TOKEN, noise_fraction=1.0)
     metadata = dataset.metadata
     print(metadata["trace_category"].value_counts())
@@ -77,6 +83,33 @@ def test_bohemia():
         assert waveforms.shape[0] == 3
         assert abs(waveforms.shape[1] - 12000) <= 1  # Sample alignment
         assert np.ptp(waveforms, axis=1).max() > 0
+
+
+def test_bohemia_fill_up():
+    """
+    A dataset compiled without noise, as before the noise traces, is checked and
+    filled up with noise.
+    """
+    _copy_bohemia_catalog()
+    TinyBohemia(eida_token=EIDA_TOKEN, noise_fraction=0.0)
+    path = TinyBohemia._path_internal()
+
+    before = check_dataset(path, 0.5, TinyBohemia.planned_trace_names())
+    print_report(before)
+    assert before.ok
+    assert all(split.noise == 0 for split in before.splits)
+
+    TinyBohemia.reopen()
+    TinyBohemia(eida_token=EIDA_TOKEN, noise_fraction=0.5)
+
+    after = check_dataset(path, 0.5, TinyBohemia.planned_trace_names())
+    print_report(after)
+    assert after.ok
+    # The event traces are kept, failed ones are tried again
+    assert [s.events for s in after.splits] == [s.events for s in before.splits]
+    assert after.missing == before.missing
+    for split in after.splits:
+        assert split.noise == round(0.5 * split.events)
 
 
 DLF_REGIONS = ("hawaii", "eifel_qseek", "japan")
