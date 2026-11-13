@@ -42,6 +42,7 @@ the downloads per data center (done, failed, time left), the logs run above it.
 seisbench-datasets bohemia --check            # or --validate; downloads nothing
 seisbench-datasets bohemia --recheck-noise    # PhaseNet over the existing noise
 seisbench-datasets bohemia --export <dir>     # MiniSEED, picks, events for pyrocko
+seisbench-datasets bohemia --report <dir>     # interactive HTML report
 ```
 
 `--check` reports the event and noise traces per split against `--noise-fraction`,
@@ -53,6 +54,17 @@ before it, and removes the noise traces with an earthquake and those above the n
 fraction from the metadata; the next run tops the noise up again. The metadata
 before is kept as `metadata.csv.bak-<time>`, the removed traces are listed in
 `noise_rejected.csv`. `--export` needs pyrocko: `uv sync --extra export`.
+
+`--report` writes `<dir>/index.html`, with plotly.js next to it (`uv sync --extra
+report`), from the metadata alone, in seconds. It shows, per split: events, traces,
+noise and picks; maps of the epicenters and the stations; magnitudes over time, the
+frequency–magnitude distribution with Mc and b-value, depths and traces per event;
+S − P times over distance, distances, back azimuths and where the picks sit in the
+traces; trace completeness and channels; and what `no_data.csv` and
+`noise_rejected.csv` record. A button above the charts hides a split in all of
+them. It also works while a dataset compiles, up to its last checkpoint. Open the
+page from the folder; the map borders load from the plotly CDN. The report holds
+station and event metadata but no waveforms.
 
 ## Use
 

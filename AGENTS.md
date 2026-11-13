@@ -27,7 +27,11 @@ large for SeisBench itself.
   A command always continues the dataset (`update=True`); `--check` (`check.py`) is
   the read-only report; `--recheck-noise` (`recheck.py`) removes noise traces with
   an earthquake or above the noise fraction from the metadata (waveforms stay in
-  the HDF5); `--export` uses `seisbench.data.inspection` (pyrocko, extra `export`). The Python constructor only compiles a missing or
+  the HDF5); `--export` uses `seisbench.data.inspection` (pyrocko, extra `export`). `--report` (`report.py`, extra `report`) writes an interactive HTML page from
+  `metadata.csv` alone; figures are plotly.js specs with colors as CSS custom
+  properties (`"--series-1"`) that `report.html` resolves per light / dark theme.
+  Splits keep their colors (train, dev, test = series 1–3) in every figure. Maps
+  are plotly geo, not tile maps: MapLibre's worker is blocked on `file://` pages. The Python constructor only compiles a missing or
   incomplete dataset, so loading a complete one stays offline.
 - Noise is planned by proportion, not 1:1: after the event traces, each split gets
   `round(noise_fraction * event traces) - noise traces` more, drawn at random event

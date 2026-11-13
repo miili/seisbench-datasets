@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title dataset report</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-7: #6250d6;
+  --seq-0: #cde2fb;
+  --seq-1: #86b6ef;
+  --seq-2: #3987e5;
+  --seq-3: #1c5cab;
+  --seq-4: #0d366b;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --water: #e3ebf3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-7: #9085e9;
+    --seq-0: #256abf;
+    --seq-1: #3987e5;
+    --seq-2: #6da7ec;
+    --seq-3: #9ec5f4;
+    --seq-4: #cde2fb;
+    --water: #1d2530;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface-1: #1a1a19;
+  --surface-2: #232322;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-7: #9085e9;
+  --seq-0: #256abf;
+  --seq-1: #3987e5;
+  --seq-2: #6da7ec;
+  --seq-3: #9ec5f4;
+  --seq-4: #cde2fb;
+  --water: #1d2530;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 64px; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header, main { max-width: 1400px; margin: 0 auto; padding: 0 24px; }
+header { padding-top: 32px; }
+h1 { font-size: 28px; font-weight: 600; margin: 0 0 4px; }
+h2 { font-size: 20px; font-weight: 600; margin: 40px 0 4px; }
+h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.meta { color: var(--text-secondary); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.meta code { font-size: 12px; overflow-wrap: anywhere; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text-primary); }
+.badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.badge.good::before { background: var(--good); }
+.badge.warning::before { background: var(--warning); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 24px 0 8px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 28px; font-weight: 600; line-height: 1.25; }
+.tile .note { color: var(--text-muted); font-size: 12px; }
+nav.bar {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--page) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+nav.bar .inner { max-width: 1400px; margin: 0 auto; padding: 8px 24px; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
+nav.bar a { color: var(--text-secondary); text-decoration: none; font-size: 14px; }
+nav.bar a:hover { color: var(--text-primary); }
+.controls { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.chip, .theme {
+  font: inherit; font-size: 13px; color: var(--text-primary);
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 12px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+}
+.chip[aria-pressed="false"] { color: var(--text-muted); }
+.chip[aria-pressed="false"] .swatch { opacity: 0.25; }
+.chip:hover, .theme:hover { background: var(--surface-2); }
+.swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.intro { grid-column: 1 / -1; color: var(--text-secondary); margin: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr)); gap: 16px; margin-top: 12px; }
+.card { margin: 0; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+.card.wide { grid-column: 1 / -1; }
+figcaption p { margin: 2px 0 8px; color: var(--text-secondary); font-size: 13px; }
+.plot { width: 100%; }
+.table-wrap { overflow: auto; max-height: 560px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { padding: 5px 10px; text-align: left; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+thead th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; }
+tbody th { font-weight: 500; }
+td.num, th.num { text-align: right; }
+table.sortable thead th { cursor: pointer; user-select: none; }
+table.sortable thead th[aria-sort="ascending"]::after { content: " ▲"; font-size: 10px; }
+table.sortable thead th[aria-sort="descending"]::after { content: " ▼"; font-size: 10px; }
+input[type="search"] {
+  font: inherit; font-size: 13px; margin-left: 8px; padding: 2px 8px; color: var(--text-primary);
+  background: var(--page); border: 1px solid var(--border); border-radius: 6px;
+}
+footer { max-width: 1400px; margin: 48px auto 32px; padding: 0 24px; color: var(--text-muted); font-size: 12px; }
+@media (max-width: 640px) {
+  header, main, footer, nav.bar .inner { padding-left: 16px; padding-right: 16px; }
+  .controls { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>$title</h1>
+  <div class="meta">$status<span>Generated $generated</span><code>$path</code></div>
+  <div class="tiles">$tiles</div>
+</header>
+<nav class="bar"><div class="inner">$nav
+  <div class="controls" role="group" aria-label="Splits">$splits
+    <button type="button" class="theme" id="theme" aria-label="Switch light and dark mode">Theme</button>
+  </div>
+</div></nav>
+<main>$body</main>
+<footer>seisbench-datasets report. Plots by plotly.js; map borders by Natural Earth (loaded from cdn.plot.ly).</footer>
+<script type="application/json" id="figures">$figures</script>
+<script src="plotly.min.js"></script>
+<script>
+(() => {
+  const FIGURES = JSON.parse(document.getElementById("figures").textContent);
+  const root = document.documentElement;
+  const hidden = new Set();
+  const rendered = new Set();
+
+  try {
+    const stored = localStorage.getItem("report-theme");
+    if (stored) root.dataset.theme = stored;
+  } catch (e) {}
+
+  const isPlain = (o) => o && typeof o === "object" && !Array.isArray(o);
+  function merge(base, over) {
+    const out = { ...base };
+    for (const [k, v] of Object.entries(over || {})) {
+      out[k] = isPlain(v) && isPlain(base[k]) ? merge(base[k], v) : v;
+    }
+    return out;
+  }
+  function resolve(value, css) {
+    if (typeof value === "string" && value.startsWith("--")) return css.getPropertyValue(value).trim();
+    if (Array.isArray(value)) return value.map((v) => resolve(v, css));
+    if (isPlain(value)) {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) out[k] = resolve(v, css);
+      return out;
+    }
+    return value;
+  }
+
+  function theme(css) {
+    const t = (name) => css.getPropertyValue(name).trim();
+    const axis = {
+      gridcolor: t("--grid"), linecolor: t("--axis"), zerolinecolor: t("--grid"),
+      showline: true, ticks: "", automargin: true,
+      tickfont: { color: t("--text-muted"), size: 11 },
+      title: { font: { color: t("--text-secondary"), size: 12 } },
+    };
+    return {
+      layout: {
+        paper_bgcolor: t("--surface-1"), plot_bgcolor: t("--surface-1"),
+        font: { family: 'system-ui, -apple-system, "Segoe UI", sans-serif', color: t("--text-secondary"), size: 12 },
+        margin: { l: 56, r: 16, t: 32, b: 48 },
+        legend: { orientation: "h", x: 0, y: 1.02, yanchor: "bottom", font: { color: t("--text-secondary") }, bgcolor: "rgba(0,0,0,0)" },
+        hoverlabel: { bgcolor: t("--surface-1"), bordercolor: t("--border"), font: { color: t("--text-primary") } },
+        bargap: 0.3, bargroupgap: 0.08, barcornerradius: 3,
+        xaxis: axis, yaxis: axis,
+        polar: {
+          bgcolor: t("--surface-1"),
+          angularaxis: { gridcolor: t("--grid"), linecolor: t("--axis"), tickfont: { color: t("--text-muted") } },
+          radialaxis: { gridcolor: t("--grid"), linecolor: t("--axis") },
+        },
+        geo: {
+          bgcolor: t("--surface-1"), showland: true, landcolor: t("--surface-2"),
+          showocean: true, oceancolor: t("--water"), lakecolor: t("--water"), rivercolor: t("--water"),
+          coastlinecolor: t("--axis"), countrycolor: t("--axis"), subunitcolor: t("--grid"),
+          coastlinewidth: 0.6, countrywidth: 0.8, subunitwidth: 0.5,
+        },
+      },
+      axis,
+    };
+  }
+
+  function draw(div) {
+    const css = getComputedStyle(root);
+    const spec = FIGURES[div.dataset.figure];
+    const { layout: base, axis } = theme(css);
+    const layout = resolve(spec.layout || {}, css);
+    let themed = merge(base, layout);
+    for (const key of Object.keys(layout)) {
+      if (/^[xy]axis\d+$$/.test(key)) themed[key] = merge(axis, layout[key]);
+    }
+    if (!layout.geo) delete themed.geo;
+    if (!layout.polar) delete themed.polar;
+    const data = resolve(spec.data, css).map((trace) => ({
+      ...trace,
+      visible: hidden.has(trace.legendgroup) ? "legendonly" : true,
+    }));
+    const first = !rendered.has(div);
+    Plotly.react(div, data, themed, {
+      responsive: true, displaylogo: false,
+      modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d"],
+    });
+    if (first) {
+      rendered.add(div);
+      div.on("plotly_legendclick", (event) => {
+        const group = event.data[event.curveNumber].legendgroup;
+        if (!document.querySelector(`.chip[data-split="$${group}"]`)) return true;
+        toggle(group);
+        return false;
+      });
+    }
+  }
+  const redraw = () => rendered.forEach(draw);
+
+  function toggle(split) {
+    if (hidden.has(split)) hidden.delete(split); else hidden.add(split);
+    document.querySelectorAll(".chip").forEach((chip) => {
+      chip.setAttribute("aria-pressed", String(!hidden.has(chip.dataset.split)));
+    });
+    redraw();
+  }
+  document.querySelectorAll(".chip").forEach((chip) => {
+    chip.addEventListener("click", () => toggle(chip.dataset.split));
+  });
+
+  document.getElementById("theme").addEventListener("click", () => {
+    const dark = getComputedStyle(root).colorScheme.includes("dark");
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("report-theme", root.dataset.theme); } catch (e) {}
+    redraw();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
+
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        observer.unobserve(entry.target);
+        draw(entry.target);
+      }
+    }
+  }, { rootMargin: "400px" });
+  document.querySelectorAll(".plot").forEach((div) => observer.observe(div));
+
+  const table = document.getElementById("station-table");
+  if (table) {
+    const body = table.tBodies[0];
+    table.querySelectorAll("thead th").forEach((th, column) => {
+      th.addEventListener("click", () => {
+        const ascending = th.getAttribute("aria-sort") !== "ascending";
+        table.querySelectorAll("thead th").forEach((h) => h.removeAttribute("aria-sort"));
+        th.setAttribute("aria-sort", ascending ? "ascending" : "descending");
+        const key = (row) => {
+          const cell = row.children[column];
+          return cell.dataset.sort !== undefined ? Number(cell.dataset.sort) : cell.textContent;
+        };
+        const rows = [...body.rows].sort((a, b) => {
+          const x = key(a), y = key(b);
+          const order = typeof x === "number" ? x - y : String(x).localeCompare(String(y));
+          return ascending ? order : -order;
+        });
+        body.append(...rows);
+      });
+    });
+    const filter = document.getElementById("station-filter");
+    filter.addEventListener("input", () => {
+      const query = filter.value.trim().toLowerCase();
+      for (const row of body.rows) {
+        row.hidden = query !== "" && !row.textContent.toLowerCase().includes(query);
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

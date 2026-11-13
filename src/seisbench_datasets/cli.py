@@ -48,6 +48,16 @@ Export = Annotated[
         "nothing.",
     ),
 ]
+Report = Annotated[
+    Path | None,
+    typer.Option(
+        file_okay=False,
+        resolve_path=True,
+        help="Write an interactive HTML report of the compiled dataset to this "
+        "folder, index.html: events, stations, picks, splits and noise. Needs "
+        "plotly, pip install seisbench-datasets[report]. Downloads nothing.",
+    ),
+]
 RecheckNoise = Annotated[
     bool,
     typer.Option(
@@ -86,10 +96,11 @@ def _prepare(
     recheck_noise: bool,
     noise_fraction: float,
     export: Path | None = None,
+    report: Path | None = None,
 ) -> bool:
     """
-    Runs --check, --recheck-noise or --export, or prepares --force. Returns True if
-    the dataset is to be compiled.
+    Runs --check, --recheck-noise, --export or --report, or prepares --force.
+    Returns True if the dataset is to be compiled.
 
     :param module: The module of the dataset, with its noise detection settings
     """
@@ -97,11 +108,14 @@ def _prepare(
 
     from seisbench_datasets.data.resume import move_to_backup
 
-    if force + check + recheck_noise + (export is not None) > 1:
+    if force + check + recheck_noise + (export is not None) + (report is not None) > 1:
         raise typer.BadParameter(
-            "Use only one of --force, --check, --recheck-noise and --export."
+            "Use only one of --force, --check, --recheck-noise, --export and --report."
         )
     try:
+        if report is not None:
+            _report(dataset, module, report, noise_fraction)
+            return False
         if export is not None:
             _export(dataset, export)
             return False
@@ -146,6 +160,45 @@ def _export(dataset: type, directory: Path) -> None:
     finally:
         lock.close()
     console.print(f"Exported {dataset.__name__} to {directory}")
+
+
+def _report(dataset: type, module, directory: Path, noise_fraction: float) -> None:
+    from seisbench_datasets.data.resume import incomplete_marker, try_lock
+
+    try:
+        from seisbench_datasets.report import write_report
+    except ImportError as exc:
+        console.print(
+            "[red]The report needs plotly: pip install seisbench-datasets[report]"
+        )
+        raise typer.Exit(1) from exc
+
+    files = dataset.files()
+    path = dataset._path_internal()
+    if not files[0].is_file():
+        console.print(f"[red]{path} has no compiled dataset.")
+        raise typer.Exit(1)
+    # A running compilation replaces metadata.csv at each checkpoint, atomically,
+    # so the report shows it up to the last one
+    lock_existed = Path(f"{files[0]}.lock").exists()
+    lock = try_lock(files[0])
+    if lock is None:
+        status = "compiling"
+    else:
+        lock.close()
+        if not lock_existed:  # Read-only: leave no lock file behind
+            Path(lock.name).unlink(missing_ok=True)
+        status = "incomplete" if incomplete_marker(files).exists() else "complete"
+    with console.status("Writing the report"):
+        index = write_report(
+            path,
+            directory,
+            title=dataset.__name__,
+            group=module.NOISE_FRACTION_GROUP,
+            noise_fraction=noise_fraction,
+            status=status,
+        )
+    console.print(f"Wrote the report of {dataset.__name__} to {index}")
 
 
 def _recheck_noise(dataset: type, module, noise_fraction: float) -> None:
@@ -245,6 +298,7 @@ def bohemia(
     check: Check = False,
     recheck_noise: RecheckNoise = False,
     export: Export = None,
+    report: Report = None,
 ) -> None:
     """
     BohemiaSaxony: local earthquakes in NW Bohemia / Vogtland and Saxony.
@@ -253,7 +307,14 @@ def bohemia(
     from seisbench_datasets.data.bohemia import BohemiaSaxony
 
     if not _prepare(
-        BohemiaSaxony, bohemia, force, check, recheck_noise, noise_fraction, export
+        BohemiaSaxony,
+        bohemia,
+        force,
+        check,
+        recheck_noise,
+        noise_fraction,
+        export,
+        report,
     ):
         return
     dataset = BohemiaSaxony(
@@ -290,6 +351,7 @@ def dlf(
     check: Check = False,
     recheck_noise: RecheckNoise = False,
     export: Export = None,
+    report: Report = None,
 ) -> None:
     """
     DeepLowFrequency: deep low-frequency events below volcanoes, plus noise.
@@ -305,6 +367,7 @@ def dlf(
         recheck_noise,
         noise_fraction,
         export,
+        report,
     ):
         return
     hinet_password = None
