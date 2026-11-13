@@ -133,6 +133,20 @@ def test_download_stats(tmp_path):
     assert len((tmp_path / "download_failures.csv").read_text().splitlines()) == 4
 
 
+def test_download_stats_skip_regions_not_compiled():
+    # Japan is in the dataset from an earlier run, but skipped without Hi-net
+    # credentials: its traces must not count against the other catalogs
+    outcomes = [
+        Outcome("event", "hawaii", "hawaii:1", "a", "downloaded"),
+        Outcome("event", "japan", "japan:1", "b", "downloaded"),
+        Outcome("event", "japan", "japan:2", "c", "downloaded"),
+    ]
+    stats = DownloadStats.from_outcomes({"hawaii": 1}, outcomes)
+    assert [region.region for region in stats.regions] == ["hawaii"]
+    assert (stats.total.events, stats.total.events_downloaded) == (1, 1)
+    assert stats.total.traces == 1
+
+
 class _Detector:
     """Reports a fixed probability, from sample ``start`` on."""
 

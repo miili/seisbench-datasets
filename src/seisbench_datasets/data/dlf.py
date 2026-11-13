@@ -260,9 +260,11 @@ class DownloadStats(NamedTuple):
         cls, events: Mapping[str, int], outcomes: Iterable[Outcome]
     ) -> DownloadStats:
         """
-        :param events: Number of events per region
+        :param events: Number of events per region, of the regions compiled. The
+            outcomes of other regions, e.g., Japan from an earlier run with Hi-net
+            credentials, are left out.
         """
-        outcomes = list(outcomes)
+        outcomes = [o for o in outcomes if o.region in events]
         return cls(
             regions=tuple(
                 RegionStats.from_outcomes(
