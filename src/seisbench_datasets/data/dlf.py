@@ -58,7 +58,6 @@ SAMPLING_RATE = 100.0
 # Noise windows are rejected if PhaseNet detects a P or S phase in them above the
 # probability. A few earthquakes in the noise are fine, other transients must stay.
 # The data before the window give PhaseNet context.
-NOISE_PHASENET_WEIGHTS = "original"
 NOISE_MAX_PHASE_PROBABILITY = 0.5
 NOISE_LEAD = 30.0
 # A rejected noise window is replaced by the one before it, up to this many rejected
@@ -324,8 +323,9 @@ class DeepLowFrequency(ResumableBenchmarkDataset):
     station before the event, with ``trace_category = "noise"``. Noise windows keep
     120 s before and 180 s after every catalog event of the region. They take the
     split of the event. A window is rejected if it has gaps, or if PhaseNet
-    (``original`` weights) detects a P or S phase with a probability above 0.5, so
-    that only earthquakes are rejected, not other transients. Components without
+    (``volpick`` weights, trained on volcano-tectonic and long-period events)
+    detects a P or S phase with a probability above 0.5, so that only earthquakes,
+    also deep low-frequency ones, are rejected, not other transients. Components without
     data are allowed, as in the event traces of the same station. A rejected window is
     replaced by the window before it, up to 5 rejected windows and one hour before
     the event. If a region still has too few noise windows, more are drawn at other
@@ -754,7 +754,7 @@ BQ, HS, NH, 1P, 2D, LU), among others.
             logger.info("Resuming: %d traces are already downloaded.", len(done))
         self._detector = None
         if self._noise_fraction > 0:
-            self._detector = EarthquakeDetector(NOISE_PHASENET_WEIGHTS, COMPONENT_ORDER)
+            self._detector = EarthquakeDetector(COMPONENT_ORDER)
 
         async with self._client as client:
             stations, networks = set(), set()
@@ -1044,10 +1044,7 @@ def check_quiet(
 
     probability = detector.max_probability(data, window_start)
     if probability > NOISE_MAX_PHASE_PROBABILITY:
-        raise NotQuietError(
-            f"Earthquake phase with probability {probability:.2f} "
-            f"({detector.weights} PhaseNet)."
-        )
+        raise NotQuietError(f"Earthquake phase with probability {probability:.2f}.")
 
 
 __all__ = ["DeepLowFrequency"]

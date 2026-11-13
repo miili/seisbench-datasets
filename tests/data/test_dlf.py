@@ -135,7 +135,6 @@ class _Detector:
     """Reports a fixed probability, from sample ``start`` on."""
 
     sampling_rate = 100.0
-    weights = "stub"
 
     def __init__(self, probability):
         self.probability = probability
@@ -172,7 +171,7 @@ def test_check_quiet():
         check_quiet(noise, 50.0, 1.0, window_start, detector)
 
 
-PHASENET_CACHED = (seisbench.cache_model_root / "phasenet" / "original.pt.v2").is_file()
+PHASENET_CACHED = any((seisbench.cache_model_root / "phasenet").glob("volpick.pt.*"))
 
 
 @pytest.mark.skipif(not PHASENET_CACHED, reason="Needs the cached PhaseNet weights")
@@ -182,20 +181,24 @@ def test_earthquake_detector():
     quake = np.stack([stream.select(component=c)[0].data for c in "ZNE"]).astype(float)
     rng = np.random.default_rng(0)
     noise = rng.normal(scale=0.05 * quake.std(), size=(3, 9001))
-    detector = EarthquakeDetector("original", "ZNE")
+    detector = EarthquakeDetector("ZNE")
 
     assert detector.max_probability(noise, 3000) < 0.1
-    in_window = noise.copy()
-    in_window[:, 4000 : 4000 + quake.shape[1]] += quake
-    assert detector.max_probability(in_window, 3000) > 0.9
+    for scale in (1.0, 0.1):
+        in_window = noise.copy()
+        in_window[:, 4000 : 4000 + quake.shape[1]] += scale * quake
+        assert detector.max_probability(in_window, 3000) > 0.8
     # An earthquake in the lead only is context, not checked
     in_lead = noise.copy()
     in_lead[:, :2000] += quake[:, :2000]
     assert detector.max_probability(in_lead, 3000) < 0.1
-    # A spike is no earthquake
+    # Spikes and glitches are no earthquakes
     spike = noise.copy()
     spike[0, 6000] = 5 * quake.max()
     assert detector.max_probability(spike, 3000) < 0.1
+    glitch = noise.copy()
+    glitch[:, 6000:6005] = 5 * quake.max()
+    assert detector.max_probability(glitch, 3000) < 0.5
 
 
 def _noise_search(quiet_after: int, origin_times: list[float]):

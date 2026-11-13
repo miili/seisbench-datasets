@@ -44,22 +44,30 @@ def check_complete(data: np.ndarray, completeness: float) -> None:
         raise ValueError(f"The window has gaps, completeness {completeness:.3f}.")
 
 
+# PhaseNet trained on volcano-tectonic and long-period events (Zhong & Tan, 2024)
+PHASENET_WEIGHTS = "volpick"
+
+
 class EarthquakeDetector:
     """
     Detects earthquake phases in a noise window with PhaseNet, a deep-learning
     picker, so that only windows with earthquakes are rejected, not those with other
-    transients, e.g., spikes, traffic or wind.
+    transients, e.g., spikes, traffic or wind. Uses the ``volpick`` weights, which
+    also detect long-period events.
 
-    :param weights: PhaseNet weights, e.g., ``original`` (Zhu & Beroza, 2019,
-        trained on Northern California) or ``volpick`` (volcanic events)
     :param component_order: Component order of the data
+    :param clip: Clip each component at this many robust standard deviations (MAD)
+        around its median before the detection. Gaussian noise never reaches it,
+        an earthquake stays an earthquake, but spikes and glitches shrink to the
+        noise. Without it, a single spike looks like a phase to models with peak
+        normalization, as ``volpick``. None disables it.
     """
 
-    def __init__(self, weights: str = "original", component_order: str = "ZNE"):
+    def __init__(self, component_order: str = "ZNE", clip: float | None = 20.0):
         import seisbench.models as sbm
 
-        self.weights = weights
-        self._model = sbm.PhaseNet.from_pretrained(weights)
+        self.clip = clip
+        self._model = sbm.PhaseNet.from_pretrained(PHASENET_WEIGHTS)
         self._model.eval()
         self._order = [component_order.index(c) for c in self._model.component_order]
         self._phases = [self._model.labels.index(phase) for phase in "PS"]
@@ -83,6 +91,10 @@ class EarthquakeDetector:
 
         n = self._model.in_samples
         x = data[self._order].astype(np.float32)
+        if self.clip is not None:
+            median = np.median(x, axis=1, keepdims=True)
+            sigma = 1.4826 * np.median(np.abs(x - median), axis=1, keepdims=True)
+            x = np.clip(x, median - self.clip * sigma, median + self.clip * sigma)
         if x.shape[1] < n:
             x = np.pad(x, ((0, 0), (0, n - x.shape[1])))
         length = x.shape[1]

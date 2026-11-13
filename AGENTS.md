@@ -31,7 +31,9 @@ large for SeisBench itself.
   `round(noise_fraction * event traces) - noise traces` more, drawn at random event
   traces (anchors) with a seeded generator. Which anchors doesn't matter.
 - DLF noise windows are rejected only for earthquakes: `EarthquakeDetector` (`noise.py`) runs
-  PhaseNet `original` and rejects P/S probabilities above 0.5. Not STA/LTA, which also
+  PhaseNet `volpick` (also detects long-period events) and rejects P/S probabilities
+  above 0.5. Data are clipped at 20 MAD first: peak-normalized `volpick` otherwise
+  calls a single spike a phase. Not STA/LTA, which also
   rejects spikes, traffic and wind and left Hawaii and Japan without noise. A few
   earthquakes in the noise are fine.
 - `src/seisbench_datasets/progress.py`: rich logging and the live download table.
