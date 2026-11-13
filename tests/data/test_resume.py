@@ -171,9 +171,9 @@ class _ToyDataset(ResumableBenchmarkDataset):
             writer.checkpoint()
 
 
-def test_dataset_resume(cache_root):
+def test_dataset_resume(tmp_path):
     path = _ToyDataset._path_internal()
-    assert path == cache_root / "_toydataset"
+    assert path == tmp_path / "datasets" / "_toydataset"
 
     _ToyDataset.fail_at = "c"
     with pytest.raises(RuntimeError):

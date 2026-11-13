@@ -3,8 +3,9 @@
 ## What this repo is
 
 Dataset compilers for SeisBench: catalog + FDSN / Hi-net waveforms → SeisBench format
-(`metadata.csv` + `waveforms.hdf5`) in our own cache, `cache.py`
-(`~/.cache/seisbench-datasets/`, `$SEISBENCH_DATASETS_CACHE`). Split out of
+(`metadata.csv` + `waveforms.hdf5`) in the SeisBench cache (`~/.seisbench/datasets/`),
+so that SeisBench finds them. Downloads that aren't part of a dataset (Hi-net blocks)
+go to our own cache, `cache.py` (`~/.cache/seisbench-datasets/`). Split out of
 `seisbench` (branch `feature/dlf-dataset`, 167b7bb) because the changes were too
 large for SeisBench itself.
 
@@ -34,6 +35,7 @@ large for SeisBench itself.
 - Tests must not touch the network. Mock the client, see `tests/data/test_dlf.py`.
 - Hi-net data may not be redistributed, WEBNET (WB) data are restricted: never
   commit or upload compiled data.
-- Dataset class names set the cache folder (`<cache root>/<classname lower>`). Tests
-  point the cache to a temp folder (`tests/conftest.py`).
+- Dataset class names set the folder in the SeisBench cache
+  (`~/.seisbench/datasets/<classname lower>`). Tests point both caches to a temp
+  folder (`tests/conftest.py`).
 - Planned features are in `ROADMAP.md`.

@@ -28,8 +28,6 @@ from seisbench import logger
 from seisbench.data.base import WaveformBenchmarkDataset, WaveformDataWriter
 from tqdm import tqdm
 
-from seisbench_datasets.cache import cache_root
-
 
 class ResumableWriter(WaveformDataWriter):
     """
@@ -255,15 +253,9 @@ class ResumableBenchmarkDataset(WaveformBenchmarkDataset):
     The compilation runs before SeisBench's own cache check, which then finds the
     finished files. ``_download_dataset`` receives a :py:class:`ResumableWriter`
     and must skip the traces in ``writer.resumed_trace_names``. Only unchunked
-    datasets are supported.
-
-    The datasets live in :py:func:`~seisbench_datasets.cache.cache_root`, not in
-    the SeisBench cache.
+    datasets are supported. The datasets live in the SeisBench cache, so that
+    SeisBench finds them.
     """
-
-    @classmethod
-    def _path_internal(cls) -> Path:
-        return cache_root() / cls._name_internal().lower()
 
     def __init__(
         self,
