@@ -30,6 +30,10 @@ large for SeisBench itself.
 - Noise is planned by proportion, not 1:1: after the event traces, each split gets
   `round(noise_fraction * event traces) - noise traces` more, drawn at random event
   traces (anchors) with a seeded generator. Which anchors doesn't matter.
+- DLF noise windows are rejected only for earthquakes: `EarthquakeDetector` (`noise.py`) runs
+  PhaseNet `original` and rejects P/S probabilities above 0.5. Not STA/LTA, which also
+  rejects spikes, traffic and wind and left Hawaii and Japan without noise. A few
+  earthquakes in the noise are fine.
 - `src/seisbench_datasets/progress.py`: rich logging and the live download table.
   `download_parallel` drives it; the table only shows after `setup_logging()`, so logs
   don't tear through it. SeisBench's tqdm bar is disabled in `ResumableWriter`.

@@ -15,8 +15,6 @@ from obspy import Inventory, UTCDateTime, read_events
 from obspy.clients.fdsn.header import URL_MAPPINGS, FDSNNoDataException
 from obspy.core.event import Catalog, Event, Pick, WaveformStreamID
 from obspy.geodetics import gps2dist_azimuth
-from obspy.signal.filter import bandpass
-from obspy.signal.trigger import classic_sta_lta
 from seisbench import logger
 from seisbench.data.base import (
     EventParameters,
@@ -34,7 +32,11 @@ from seisbench_datasets.data.multiclient import (
     get_cached_inventory,
     get_waveform_array,
 )
-from seisbench_datasets.data.noise import NOISE_GAP_BEFORE_EVENT, is_away_from_events
+from seisbench_datasets.data.noise import (
+    NOISE_GAP_BEFORE_EVENT,
+    EarthquakeDetector,
+    is_away_from_events,
+)
 from seisbench_datasets.data.resume import ResumableBenchmarkDataset
 
 # One QuakeML file per region, <region>.xml. Japan needs a Hi-net account.
@@ -53,13 +55,11 @@ NCEDC_NETWORKS = ("BK", "NC", "BG", "NN", "WR")
 COMPONENT_ORDER = "ZNE"
 SAMPLING_RATE = 100.0
 
-# Noise windows are rejected if the STA/LTA of a bandpassed component exceeds the
-# threshold. The data before the window lets the filter and the LTA settle.
-NOISE_FREQMIN = 1.0
-NOISE_FREQMAX = 15.0
-NOISE_STA = 1.0
-NOISE_LTA = 20.0
-NOISE_MAX_STA_LTA = 3.0
+# Noise windows are rejected if PhaseNet detects a P or S phase in them above the
+# probability. A few earthquakes in the noise are fine, other transients must stay.
+# The data before the window give PhaseNet context.
+NOISE_PHASENET_WEIGHTS = "original"
+NOISE_MAX_PHASE_PROBABILITY = 0.5
 NOISE_LEAD = 30.0
 # A rejected noise window is replaced by the one before it, up to this many rejected
 # downloads and this far (s) before the event
@@ -81,7 +81,7 @@ Status = Literal["downloaded", "failed", "no_source", "near_event", "not_quiet"]
 
 class NotQuietError(Exception):
     """
-    A noise window has gaps or an STA/LTA above the threshold.
+    A noise window has gaps or an earthquake phase.
     """
 
 
@@ -144,7 +144,7 @@ class Job(NamedTuple):
     def request(self) -> WaveformRequest:
         """
         The waveforms to download. Noise windows start :py:data:`NOISE_LEAD` earlier,
-        for the STA/LTA check.
+        as context for the earthquake detection.
         """
         lead = NOISE_LEAD if self.kind == "noise" else 0.0
         return WaveformRequest(
@@ -323,9 +323,10 @@ class DeepLowFrequency(ResumableBenchmarkDataset):
     For a fraction of the event traces, a noise window is downloaded from the same
     station before the event, with ``trace_category = "noise"``. Noise windows keep
     120 s before and 180 s after every catalog event of the region. They take the
-    split of the event. A window is rejected if it has gaps, or if the STA/LTA
-    (1 s / 20 s, 1-15 Hz) of a component exceeds 3. Components without data are
-    allowed, as in the event traces of the same station. A rejected window is
+    split of the event. A window is rejected if it has gaps, or if PhaseNet
+    (``original`` weights) detects a P or S phase with a probability above 0.5, so
+    that only earthquakes are rejected, not other transients. Components without
+    data are allowed, as in the event traces of the same station. A rejected window is
     replaced by the window before it, up to 5 rejected windows and one hour before
     the event. If a region still has too few noise windows, more are drawn at other
     event traces, until the noise fraction is reached.
@@ -724,6 +725,7 @@ BQ, HS, NH, 1P, 2D, LU), among others.
                 sampling_rate,
                 trace_params["trace_completeness"],
                 window_start,
+                self._detector,
             )
             data = data[:, window_start:]
             trace_params["trace_start_time"] = str(start + window_start / sampling_rate)
@@ -750,6 +752,9 @@ BQ, HS, NH, 1P, 2D, LU), among others.
         outcomes = resumed_outcomes(writer.resumed_metadata)
         if done:
             logger.info("Resuming: %d traces are already downloaded.", len(done))
+        self._detector = None
+        if self._noise_fraction > 0:
+            self._detector = EarthquakeDetector(NOISE_PHASENET_WEIGHTS, COMPONENT_ORDER)
 
         async with self._client as client:
             stations, networks = set(), set()
@@ -1011,12 +1016,16 @@ def split_events(
 
 
 def check_quiet(
-    data: np.ndarray, sampling_rate: float, completeness: float, window_start: int
+    data: np.ndarray,
+    sampling_rate: float,
+    completeness: float,
+    window_start: int,
+    detector: EarthquakeDetector,
 ) -> None:
     """
-    Raises :py:class:`NotQuietError` if the noise window has gaps, or if the STA/LTA
-    of a component exceeds :py:data:`NOISE_MAX_STA_LTA` within the window.
-    Components without data are allowed.
+    Raises :py:class:`NotQuietError` if the noise window has gaps, or if the
+    detector finds an earthquake phase in the window with a probability above
+    :py:data:`NOISE_MAX_PHASE_PROBABILITY`. Components without data are allowed.
 
     :param data: Waveforms, starting :py:data:`NOISE_LEAD` before the window
     :param completeness: Fraction of the samples that contain data
@@ -1025,24 +1034,20 @@ def check_quiet(
     has_data = np.ptp(data, axis=1) > 0
     if not has_data.any():
         raise NotQuietError("No component has data.")
-    if window_start < round(NOISE_LTA * sampling_rate):
-        raise NotQuietError("The data start too late for the STA/LTA.")
     # Missing components count as incomplete, so compare with the components we have
     if completeness < has_data.sum() / len(data) - 1e-3:
         raise NotQuietError(f"The window has gaps, completeness {completeness:.3f}.")
+    if sampling_rate != detector.sampling_rate:
+        raise ValueError(
+            f"The detector needs {detector.sampling_rate} Hz, not {sampling_rate} Hz."
+        )
 
-    for component in data[has_data]:
-        filtered = bandpass(
-            component, NOISE_FREQMIN, NOISE_FREQMAX, df=sampling_rate, corners=4
+    probability = detector.max_probability(data, window_start)
+    if probability > NOISE_MAX_PHASE_PROBABILITY:
+        raise NotQuietError(
+            f"Earthquake phase with probability {probability:.2f} "
+            f"({detector.weights} PhaseNet)."
         )
-        ratio = classic_sta_lta(
-            filtered,
-            round(NOISE_STA * sampling_rate),
-            round(NOISE_LTA * sampling_rate),
-        )
-        max_ratio = ratio[window_start:].max()
-        if max_ratio > NOISE_MAX_STA_LTA:
-            raise NotQuietError(f"STA/LTA {max_ratio:.1f} exceeds {NOISE_MAX_STA_LTA}.")
 
 
 __all__ = ["DeepLowFrequency"]

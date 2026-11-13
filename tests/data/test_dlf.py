@@ -1,7 +1,9 @@
 import asyncio
 
 import numpy as np
+import obspy
 import pytest
+import seisbench
 from obspy import UTCDateTime
 from obspy.core.event import (
     Comment,
@@ -29,6 +31,7 @@ from seisbench_datasets.data.dlf import (
     split_events,
 )
 from seisbench_datasets.data.multiclient import FDSNSource
+from seisbench_datasets.data.noise import EarthquakeDetector
 
 
 def test_is_quiet():
@@ -128,34 +131,71 @@ def test_download_stats(tmp_path):
     assert len((tmp_path / "download_failures.csv").read_text().splitlines()) == 4
 
 
+class _Detector:
+    """Reports a fixed probability, from sample ``start`` on."""
+
+    sampling_rate = 100.0
+    weights = "stub"
+
+    def __init__(self, probability):
+        self.probability = probability
+        self.starts = []
+
+    def max_probability(self, data, start=0):
+        self.starts.append(start)
+        return self.probability
+
+
 def test_check_quiet():
     rng = np.random.default_rng(0)
     sampling_rate = 100.0
     window_start = 3000  # NOISE_LEAD of 30 s
     noise = rng.normal(size=(3, 9001))
 
-    check_quiet(noise, sampling_rate, 1.0, window_start)
+    detector = _Detector(0.1)
+    check_quiet(noise, sampling_rate, 1.0, window_start, detector)
+    # Only the window is checked, the lead is context
+    assert detector.starts == [window_start]
 
     # A component without data, e.g., a vertical-only station, is fine
     z_only = noise.copy()
     z_only[1:] = 0
-    check_quiet(z_only, sampling_rate, 1 / 3, window_start)
+    check_quiet(z_only, sampling_rate, 1 / 3, window_start, detector)
 
-    # An arrival in the window
-    burst = noise.copy()
-    burst[0, 6000:6200] *= 20
-    with pytest.raises(NotQuietError, match="STA/LTA"):
-        check_quiet(burst, sampling_rate, 1.0, window_start)
-
-    # An arrival before the window is not checked
-    early = noise.copy()
-    early[0, 500:700] *= 20
-    check_quiet(early, sampling_rate, 1.0, window_start)
-
+    with pytest.raises(NotQuietError, match="Earthquake phase with probability 0.90"):
+        check_quiet(noise, sampling_rate, 1.0, window_start, _Detector(0.9))
     with pytest.raises(NotQuietError, match="gaps"):
-        check_quiet(noise, sampling_rate, 0.9, window_start)
-    with pytest.raises(NotQuietError, match="too late"):
-        check_quiet(noise, sampling_rate, 1.0, 1000)
+        check_quiet(noise, sampling_rate, 0.9, window_start, detector)
+    with pytest.raises(NotQuietError, match="No component"):
+        check_quiet(np.zeros((3, 9001)), sampling_rate, 0.0, window_start, detector)
+    with pytest.raises(ValueError, match="needs 100.0 Hz"):
+        check_quiet(noise, 50.0, 1.0, window_start, detector)
+
+
+PHASENET_CACHED = (seisbench.cache_model_root / "phasenet" / "original.pt.v2").is_file()
+
+
+@pytest.mark.skipif(not PHASENET_CACHED, reason="Needs the cached PhaseNet weights")
+def test_earthquake_detector():
+    # ObsPy's example: a local earthquake recorded at BW.RJOB, 100 Hz
+    stream = obspy.read()
+    quake = np.stack([stream.select(component=c)[0].data for c in "ZNE"]).astype(float)
+    rng = np.random.default_rng(0)
+    noise = rng.normal(scale=0.05 * quake.std(), size=(3, 9001))
+    detector = EarthquakeDetector("original", "ZNE")
+
+    assert detector.max_probability(noise, 3000) < 0.1
+    in_window = noise.copy()
+    in_window[:, 4000 : 4000 + quake.shape[1]] += quake
+    assert detector.max_probability(in_window, 3000) > 0.9
+    # An earthquake in the lead only is context, not checked
+    in_lead = noise.copy()
+    in_lead[:, :2000] += quake[:, :2000]
+    assert detector.max_probability(in_lead, 3000) < 0.1
+    # A spike is no earthquake
+    spike = noise.copy()
+    spike[0, 6000] = 5 * quake.max()
+    assert detector.max_probability(spike, 3000) < 0.1
 
 
 def _noise_search(quiet_after: int, origin_times: list[float]):
@@ -170,7 +210,7 @@ def _noise_search(quiet_after: int, origin_times: list[float]):
     async def get_waveform_data(window, inventory):
         windows.append(window)
         if len(windows) <= quiet_after:
-            raise NotQuietError("STA/LTA 9.9 exceeds 3.0.")
+            raise NotQuietError("Earthquake phase with probability 0.95.")
         return Download({"trace_name": window.trace_name}, np.zeros((3, 6001)))
 
     dataset.get_waveform_data = get_waveform_data
