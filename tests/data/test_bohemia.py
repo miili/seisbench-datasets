@@ -4,9 +4,10 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import pytest
-from obspy import UTCDateTime
+from obspy import Inventory, UTCDateTime
 from obspy.clients.fdsn.header import FDSNNoDataException
 from obspy.core.event import WaveformStreamID
+from obspy.core.inventory import Channel, Network, Station
 
 from seisbench_datasets.data.bohemia import (
     NOISE_CANDIDATES,
@@ -15,6 +16,8 @@ from seisbench_datasets.data.bohemia import (
     NoiseJob,
     anchors_from_metadata,
     draw_noise_starttimes,
+    get_channel_index,
+    get_location_code,
     in_swarm,
     load_swarms,
 )
@@ -232,3 +235,45 @@ def test_noise_data_takes_first_complete_window(monkeypatch):
                 job._replace(starttimes=tuple(starts[:2])), _Inventory()
             )
         )
+
+
+def _channel(code, location, start, end=None):
+    return Channel(
+        code,
+        location,
+        latitude=50.6,
+        longitude=13.0,
+        elevation=483.0,
+        depth=82.0,
+        start_date=UTCDateTime(start),
+        end_date=end and UTCDateTime(end),
+    )
+
+
+def test_location_code_from_inventory():
+    # As SX.FROHN: location 00 until 2025-05-13, none since
+    station = Station(
+        "FROHN",
+        latitude=50.6,
+        longitude=13.0,
+        elevation=483.0,
+        channels=[
+            _channel("HHZ", "00", "2019-08-22", "2025-05-13"),
+            _channel("HHZ", "", "2025-05-13"),
+            _channel("HNZ", "00", "2019-08-22"),
+            _channel("HNZ", "10", "2019-08-22"),
+        ],
+    )
+    index = get_channel_index(Inventory([Network("SX", stations=[station])]))
+
+    def location(channel, time, location=""):
+        waveform_id = WaveformStreamID("SX", "FROHN", location, channel)
+        return get_location_code(waveform_id, index, UTCDateTime(time))
+
+    assert location("HHZ", "2021-06-01") == "00"
+    assert location("HHZ", "2025-06-01") == ""
+    assert location("HHZ", "2021-06-01", location="00") == "00"
+    # Not in the inventory at the time, or ambiguous: unchanged
+    assert location("HHZ", "2010-01-01") == ""
+    assert location("HHE", "2021-06-01") == ""
+    assert location("HNZ", "2021-06-01") == ""

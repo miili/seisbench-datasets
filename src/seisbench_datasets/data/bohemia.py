@@ -910,9 +910,10 @@ def get_trace_params(
 
 def fixup_catalog(catalog: Catalog, inventory: Inventory) -> Catalog:
     """
-    Fixes the channel codes of the picks.
+    Fixes the network, station, channel and location codes of the picks.
     """
     station_index = get_station_index(inventory)
+    channel_index = get_channel_index(inventory)
     for event in catalog.events.copy():
         origin = event.preferred_origin()
         if origin is None:
@@ -956,6 +957,11 @@ def fixup_catalog(catalog: Catalog, inventory: Inventory) -> Catalog:
 
             if waveform_id.channel_code in REMOVE_CHANNELS:
                 event.picks.remove(pick)
+                continue
+
+            waveform_id.location_code = get_location_code(
+                waveform_id, channel_index, origin_time
+            )
 
         if not event.picks:
             logger.debug("Removing event %s with no picks.", event.resource_id)
@@ -978,6 +984,48 @@ def get_station_index(inventory: Inventory) -> StationIndex:
                 (network.code, station.start_date, station.end_date)
             )
     return index
+
+
+ChannelIndex = dict[tuple[str, str, str], list[tuple[str, UTCDateTime, UTCDateTime]]]
+
+
+def get_channel_index(inventory: Inventory) -> ChannelIndex:
+    """
+    Maps each network, station and channel code to its location codes and epochs.
+    """
+    index: ChannelIndex = defaultdict(list)
+    never = UTCDateTime(2100, 1, 1)
+    for network in inventory:
+        for station in network:
+            for channel in station:
+                index[network.code, station.code, channel.code].append(
+                    (
+                        channel.location_code,
+                        channel.start_date or UTCDateTime(0),
+                        channel.end_date or never,
+                    )
+                )
+    return index
+
+
+def get_location_code(
+    waveform_id: WaveformStreamID, channel_index: ChannelIndex, time: UTCDateTime
+) -> str:
+    """
+    The location code of the pick's channel in the inventory at ``time``: the pick's
+    own, or, if the inventory has another one only, that one. E.g., SX.FROHN is
+    archived with location 00 from 2019 to 2025, while the catalog has none.
+    Unchanged if the channel is not in the inventory at the time, or with several
+    other location codes.
+    """
+    location = waveform_id.location_code or ""
+    key = (waveform_id.network_code, waveform_id.station_code, waveform_id.channel_code)
+    active = {
+        code for code, start, end in channel_index.get(key, ()) if start <= time < end
+    }
+    if location in active or len(active) != 1:
+        return location
+    return active.pop()
 
 
 def is_temporary_network(network_code: str) -> bool:
