@@ -794,12 +794,18 @@ BQ, HS, NH, 1P, 2D, LU), among others.
                 return await self.get_waveform_data(job, inv)
 
             with_noise, noise_candidates = noise_state(jobs, done, catalogs)
-            jobs = [(source, job) for source, job in jobs if job.trace_name not in done]
+            jobs = [
+                (source, job)
+                for source, job in jobs
+                if job.trace_name not in done and job.trace_name not in writer.no_data
+            ]
 
             def write(job: Job, result: Download | None, exc: Exception | None):
                 if isinstance(exc, NoNoiseWindowError):
                     outcomes.append(job.outcome(exc.status, exc, exc.rejected))
                     return
+                if isinstance(exc, FDSNNoDataException):
+                    writer.no_data.add(job.trace_name, exc)
                 if exc is not None:
                     logger.debug("Could not download %s: %s", job.trace_name, exc)
                     outcomes.append(job.outcome("failed", exc))

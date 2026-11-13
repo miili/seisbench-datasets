@@ -13,6 +13,7 @@ import h5py
 import pandas as pd
 from rich.table import Table
 
+from seisbench_datasets.data.resume import NO_DATA_FILE, NoDataLog
 from seisbench_datasets.progress import console
 
 COLUMNS = {"trace_name", "trace_name_original", "trace_category", "split"}
@@ -40,6 +41,8 @@ class CheckReport(NamedTuple):
     missing: list[str] | None = None
     #: Event traces in the dataset that are not planned, None if not checked
     extra: list[str] | None = None
+    #: The missing traces the data centers have no data for, see ``no_data.csv``
+    no_data: list[str] | None = None
 
     @property
     def ok(self) -> bool:
@@ -92,11 +95,13 @@ def check_dataset(
         for split in sorted(events | noise)
     ]
 
-    missing = extra = None
+    missing = extra = no_data = None
     if planned is not None:
         present = set(names[~is_noise])
         missing = sorted(planned - present)
         extra = sorted(present - planned)
+        log = NoDataLog(path / NO_DATA_FILE)
+        no_data = [name for name in missing if name in log]
 
     return CheckReport(
         path=path,
@@ -106,6 +111,7 @@ def check_dataset(
         noise_fraction=noise_fraction,
         missing=missing,
         extra=extra,
+        no_data=no_data,
     )
 
 
@@ -150,12 +156,20 @@ def print_report(report: CheckReport) -> None:
         console.print("Missing traces: not checked, the dataset has no plan.")
         return
     if report.missing:
-        stations = Counter(_station(name) for name in report.missing)
+        no_data = set(report.no_data or ())
+        other = [name for name in report.missing if name not in no_data]
         console.print(
-            f"[yellow]{len(report.missing)} planned event traces are missing[/], "
-            "most at: "
-            + ", ".join(f"{station} {n}" for station, n in stations.most_common(10))
+            f"[yellow]{len(report.missing)} planned event traces are missing:[/] "
+            f"{len(no_data)} without data at the data centers ({NO_DATA_FILE}, "
+            f"skipped), {len(other)} failed otherwise or not tried yet."
         )
+        for label, names in (("Without data", no_data), ("Other", other)):
+            if names:
+                stations = Counter(_station(name) for name in names)
+                console.print(
+                    f"  {label}, most at: "
+                    + ", ".join(f"{s} {n}" for s, n in stations.most_common(10))
+                )
     else:
         console.print("[green]No planned event traces are missing.")
     if report.extra:

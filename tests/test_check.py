@@ -32,6 +32,7 @@ def _write(path, bucket_size):
 def test_check_dataset(tmp_path):
     _write(tmp_path, bucket_size=4)
     planned = {f"e{i}" for i in range(9)} | {"e42"}
+    (tmp_path / "no_data.csv").write_text("trace_name,reason\ne42,no data\n")
     report = check_dataset(tmp_path, 0.3, planned)
 
     assert report.ok
@@ -40,6 +41,7 @@ def test_check_dataset(tmp_path):
     assert report.splits[1].noise_fraction == 3 / 8
     assert report.missing == ["e42"]
     assert report.extra == ["e9"]
+    assert report.no_data == ["e42"]
 
     assert check_dataset(tmp_path, 0.3).missing is None
 

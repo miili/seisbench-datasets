@@ -519,14 +519,24 @@ Seismic Networks:
             catalog = fixup_catalog(catalog, inv)
 
             jobs = []
+            n_no_data = 0
             for job in plan_event_jobs(catalog):
                 if _job_name(job) in done:
+                    continue
+                if _job_name(job) in writer.no_data:
+                    n_no_data += 1
                     continue
                 network = job[2][0].waveform_id.network_code
                 try:
                     jobs.append((client.get_source(network), job))
                 except KeyError as exc:
                     logger.warning("Skipping station: %s", exc)
+            if n_no_data:
+                logger.info(
+                    "Skipping %d traces the data centers have no data for, see %s.",
+                    n_no_data,
+                    writer.no_data.path,
+                )
 
             async def download(job):
                 if isinstance(job, NoiseJob):
@@ -554,6 +564,8 @@ Seismic Networks:
                     noise[job.split] += 1
                     return
                 event, event_params, picks = job
+                if isinstance(exc, FDSNNoDataException):
+                    writer.no_data.add(_job_name(job), exc)
                 if exc is not None:
                     logger.warning(
                         "Error processing station %s of event %s: %s",

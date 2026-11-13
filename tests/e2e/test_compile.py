@@ -98,14 +98,16 @@ def test_bohemia_fill_up():
     print_report(before)
     assert before.ok
     assert all(split.noise == 0 for split in before.splits)
+    # GEOFON has no WB.VAC data for the events: recorded, and skipped from now on
+    assert before.missing and before.no_data == before.missing
 
-    TinyBohemia.reopen()
-    TinyBohemia(eida_token=EIDA_TOKEN, noise_fraction=0.5)
+    TinyBohemia(eida_token=EIDA_TOKEN, noise_fraction=0.5, update=True)
 
     after = check_dataset(path, 0.5, TinyBohemia.planned_trace_names())
     print_report(after)
     assert after.ok
-    # The event traces are kept, failed ones are tried again
+    assert TinyBohemia.is_complete()
+    # The event traces are kept
     assert [s.events for s in after.splits] == [s.events for s in before.splits]
     assert after.missing == before.missing
     for split in after.splits:

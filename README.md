@@ -9,7 +9,7 @@ finds them, and an interrupted download resumes where it stopped.
 
 | Dataset | Content | Sources |
 | --- | --- | --- |
-| `BohemiaSaxony` | Local earthquakes in NW Bohemia / Vogtland and Saxony, 2009–2024, manual P and S picks, plus noise from quiet periods | BGR, GFZ (SX, WB, TH, CZ) |
+| `BohemiaSaxony` | Local earthquakes in NW Bohemia / Vogtland and Saxony, 2006–2024, manual P and S picks, plus noise from quiet periods | BGR, GFZ (SX, WB, TH, CZ) |
 | `DeepLowFrequency` | Deep low-frequency (DLF / DLP) events below volcanoes in Alaska, Japan, Hawaii, N. California, the Cascades and the Eifel, plus noise windows | EarthScope, NCEDC, BGR, GFZ, NIED Hi-net |
 
 ## Install
@@ -29,22 +29,23 @@ seisbench-datasets bohemia --eida-token ~/.eidatoken
 seisbench-datasets dlf --catalog-dir quakeml/ [--hinet-user USER]
 ```
 
-A live table shows the downloads per data center (done, failed, time left), the
-logs run above it. Stop with Ctrl-C and run the same command again to resume.
+The dataset is compiled in place, and a command always continues it from what is
+there: it downloads the planned traces that are missing and tops up the noise to
+`--noise-fraction` in each split. So the same command compiles a new dataset,
+continues an interrupted one (Ctrl-C is fine), and fills up an older one. Traces the
+data centers have no data for (HTTP 204 / 404) are recorded in `no_data.csv` in the
+dataset folder and skipped; delete the file to try them again. A live table shows
+the downloads per data center (done, failed, time left), the logs run above it.
 `--force` moves an existing dataset to a backup folder and compiles it anew.
 
 ```sh
 seisbench-datasets bohemia --check     # or --validate; downloads nothing
-seisbench-datasets bohemia --fill-up --eida-token ~/.eidatoken
 ```
 
 `--check` reports the event and noise traces per split against `--noise-fraction`,
 traces without waveforms in the HDF5 file, and, for BohemiaSaxony, the event traces
-the catalog plans that are missing (it reads the whole catalog, about a minute). It
-also checks the partial files of an interrupted compilation. `--fill-up` downloads
-what a compiled dataset is missing: planned traces that failed before, and noise
-traces up to the noise fraction of each split. The dataset can't be loaded until the
-fill-up finishes; an interrupted fill-up resumes like a compilation.
+the catalog plans that are missing, with and without data at the data centers (it
+reads the whole catalog, about a minute).
 
 ## Use
 

@@ -14,7 +14,10 @@ from seisbench_datasets.progress import console, setup_logging
 
 app = typer.Typer(
     help="Compile SeisBench training datasets from catalogs and FDSN / Hi-net "
-    "waveforms. An interrupted compilation resumes when it is started again.",
+    "waveforms. A command continues the dataset from what is there: it downloads "
+    "the planned traces that are missing and tops up the noise. Traces the data "
+    "centers have no data for (HTTP 204 / 404) are recorded in no_data.csv and "
+    "skipped; delete the file to try them again.",
     no_args_is_help=True,
 )
 
@@ -44,13 +47,6 @@ Check = Annotated[
         "missing.",
     ),
 ]
-FillUp = Annotated[
-    bool,
-    typer.Option(
-        help="Download what a compiled dataset is missing: planned traces that "
-        "failed, and noise up to the noise fraction."
-    ),
-]
 NoiseFraction = Annotated[
     float,
     typer.Option(min=0.0, help="Noise traces per event trace, in each split."),
@@ -62,17 +58,16 @@ def main() -> None:
     setup_logging()
 
 
-def _prepare(dataset: type, force: bool, check: bool, fill_up: bool, noise_fraction):
+def _prepare(dataset: type, force: bool, check: bool, noise_fraction) -> bool:
     """
-    Runs --check, or prepares --force and --fill-up. Returns True if the dataset is
-    to be created.
+    Runs --check, or prepares --force. Returns True if the dataset is to be compiled.
     """
     from seisbench import logger
 
     from seisbench_datasets.data.resume import move_to_backup
 
-    if force + check + fill_up > 1:
-        raise typer.BadParameter("Use only one of --force, --check and --fill-up.")
+    if force and check:
+        raise typer.BadParameter("Use only one of --force and --check.")
     try:
         if check:
             _check(dataset, noise_fraction)
@@ -81,14 +76,6 @@ def _prepare(dataset: type, force: bool, check: bool, fill_up: bool, noise_fract
             backup = move_to_backup(dataset._path_internal())
             if backup is not None:
                 logger.info("Moved the existing dataset to %s", backup)
-        if fill_up:
-            if not all(file.is_file() for file in dataset.files()):
-                console.print(
-                    "[red]The dataset is not compiled. Compile it first, an "
-                    "interrupted compilation resumes."
-                )
-                raise typer.Exit(1)
-            dataset.reopen()
     except RuntimeError as exc:
         console.print(f"[red]{exc}")
         raise typer.Exit(1) from exc
@@ -97,25 +84,29 @@ def _prepare(dataset: type, force: bool, check: bool, fill_up: bool, noise_fract
 
 def _check(dataset: type, noise_fraction: float) -> None:
     from seisbench_datasets.check import check_dataset, print_report
-    from seisbench_datasets.data.resume import try_lock
+    from seisbench_datasets.data.resume import incomplete_marker, try_lock
 
     path = dataset._path_internal()
     files = dataset.files()
-    partial = not all(file.is_file() for file in files)
-    if partial:
-        if not all(
-            (file.parent / (file.name + ".partial")).is_file() for file in files
-        ):
-            console.print(f"[red]{path} has no compiled dataset.")
-            raise typer.Exit(1)
-        lock = try_lock(files[0])
-        if lock is None:
-            console.print(f"[red]A compilation into {path} is running.")
-            raise typer.Exit(1)
-        lock.close()
+    # Files of an interrupted compilation of an earlier version
+    partial = not all(file.is_file() for file in files) and all(
+        (file.parent / (file.name + ".partial")).is_file() for file in files
+    )
+    if not partial and not all(file.is_file() for file in files):
+        console.print(f"[red]{path} has no compiled dataset.")
+        raise typer.Exit(1)
+    lock_existed = Path(f"{files[0]}.lock").exists()
+    lock = try_lock(files[0])
+    if lock is None:
+        console.print(f"[red]A compilation into {path} is running.")
+        raise typer.Exit(1)
+    lock.close()
+    if not lock_existed:  # Read-only: leave no lock file behind
+        Path(lock.name).unlink(missing_ok=True)
+    if partial or incomplete_marker(files).exists():
         console.print(
-            "[yellow]Checking the partial files of an interrupted compilation, up to "
-            "its last checkpoint. Compile again to resume."
+            "[yellow]The compilation was interrupted, checking up to its last "
+            "checkpoint. Run the command without --check to continue it."
         )
     with console.status("Planning the traces from the catalog"):
         planned = dataset.planned_trace_names()
@@ -131,18 +122,18 @@ def bohemia(
     noise_fraction: NoiseFraction = 0.3,
     force: Force = False,
     check: Check = False,
-    fill_up: FillUp = False,
 ) -> None:
     """
     BohemiaSaxony: local earthquakes in NW Bohemia / Vogtland and Saxony.
     """
     from seisbench_datasets.data.bohemia import BohemiaSaxony
 
-    if not _prepare(BohemiaSaxony, force, check, fill_up, noise_fraction):
+    if not _prepare(BohemiaSaxony, force, check, noise_fraction):
         return
     dataset = BohemiaSaxony(
         eida_token=str(eida_token) if eida_token else None,
         noise_fraction=noise_fraction,
+        update=True,
         component_order="ZNE",
     )
     console.print(f"{dataset}\nin {dataset.path}")
@@ -171,14 +162,13 @@ def dlf(
     noise_fraction: NoiseFraction = 0.3,
     force: Force = False,
     check: Check = False,
-    fill_up: FillUp = False,
 ) -> None:
     """
     DeepLowFrequency: deep low-frequency events below volcanoes, plus noise.
     """
     from seisbench_datasets.data.dlf import DeepLowFrequency
 
-    if not _prepare(DeepLowFrequency, force, check, fill_up, noise_fraction):
+    if not _prepare(DeepLowFrequency, force, check, noise_fraction):
         return
     hinet_password = None
     if hinet_user is not None:
@@ -191,6 +181,7 @@ def dlf(
         hinet_user=hinet_user,
         hinet_password=hinet_password,
         noise_fraction=noise_fraction,
+        update=True,
         component_order="ZNE",
     )
     console.print(f"{dataset}\nin {dataset.path}")
