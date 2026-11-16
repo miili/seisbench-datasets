@@ -52,6 +52,9 @@ large for SeisBench itself.
 
 - `uv sync`, then `uv run pytest`. Hooks: `prek install` once, `prek run --all-files`
   to check everything (ruff lint + format, uv lock, basic file checks).
+- To analyse a compiled dataset (trace counts, noise fraction, splits), use the CLI,
+  not pandas on `metadata.csv`: `uv run seisbench-datasets dlf --check` (or
+  `bohemia`) is read-only and needs no credentials.
 - End-to-end tests compile tiny subsets from the real data centers. They are
   deselected by default; run them with `uv sync --extra hinet`, then
   `EIDA_TOKEN=<file> DLF_CATALOG_DIR=<quakeml dir> HINET_USER=<user>
