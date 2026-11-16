@@ -39,8 +39,8 @@ large for SeisBench itself.
   `cap_noise_jobs` to the noise fraction of each region, so that a resumed
   compilation doesn't download windows that were replaced before.
 - Noise windows are rejected only for earthquakes: `EarthquakeDetector` (`noise.py`) runs
-  PhaseNet and rejects P/S probabilities above 0.5, with `volpick` for DLF (also
-  detects long-period events) and `original` for Bohemia (local earthquakes). Data are clipped at 20 MAD first: peak-normalized `volpick` otherwise
+  PhaseNet and rejects P/S probabilities above 0.3 with `volpick` for DLF (also
+  detects long-period events) and above 0.5 with `original` for Bohemia (local earthquakes). Data are clipped at 20 MAD first: peak-normalized `volpick` otherwise
   calls a single spike a phase. Not STA/LTA, which also
   rejects spikes, traffic and wind and left Hawaii and Japan without noise. A few
   earthquakes in the noise are fine.

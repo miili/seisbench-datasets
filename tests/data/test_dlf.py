@@ -213,7 +213,7 @@ def test_earthquake_detector(weights):
     assert detector.max_probability(spike, 3000) < 0.1
     glitch = noise.copy()
     glitch[:, 6000:6005] = 5 * quake.max()
-    assert detector.max_probability(glitch, 3000) < 0.5
+    assert detector.max_probability(glitch, 3000) < 0.3
 
 
 def _noise_search(quiet_after: int, origin_times: list[float]):

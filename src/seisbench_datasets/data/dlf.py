@@ -61,7 +61,7 @@ SAMPLING_RATE = 100.0
 # probability. A few earthquakes in the noise are fine, other transients must stay.
 # The data before the window give PhaseNet context.
 NOISE_PHASENET_WEIGHTS = "volpick"
-NOISE_MAX_PHASE_PROBABILITY = 0.5
+NOISE_MAX_PHASE_PROBABILITY = 0.3
 # The noise fraction holds per region
 NOISE_FRACTION_GROUP = "source_region"
 NOISE_LEAD = 30.0
@@ -325,7 +325,7 @@ class DeepLowFrequency(ResumableBenchmarkDataset):
     120 s before and 180 s after every catalog event of the region. They take the
     split of the event. A window is rejected if it has gaps, or if PhaseNet
     (``volpick`` weights, trained on volcano-tectonic and long-period events)
-    detects a P or S phase with a probability above 0.5, so that only earthquakes,
+    detects a P or S phase with a probability above 0.3, so that only earthquakes,
     also deep low-frequency ones, are rejected, not other transients. Components without
     data are allowed, as in the event traces of the same station. A rejected window is
     replaced by the window before it, up to 5 rejected windows and one hour before
